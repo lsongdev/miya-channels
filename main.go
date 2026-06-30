@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -141,7 +140,6 @@ func (w *acpWorker) handle(req *promptRequest) {
 		return
 	}
 
-	var contentBuilder strings.Builder
 	w.client.OnNotification(func(method string, params json.RawMessage) {
 		if method != "session/update" {
 			return
@@ -171,12 +169,14 @@ func (w *acpWorker) handle(req *promptRequest) {
 			return
 		}
 		if content.Type == "text" && content.Text != "" {
-			contentBuilder.WriteString(content.Text)
+			if err := writer.Write(content.Text, false); err != nil {
+				log.Printf("[ERROR] Failed to write chunk: %v", err)
+			}
 		}
 	})
 
 	log.Printf("[DEBUG] Sending Prompt (session=%s)...", session.sessionID)
-	promptResp, err := w.client.Prompt(&acp.PromptRequest{
+	_, err = w.client.Prompt(&acp.PromptRequest{
 		SessionID: session.sessionID,
 		Prompt: []acp.ContentBlock{
 			{Type: "text", Text: msg.Content},
@@ -189,23 +189,8 @@ func (w *acpWorker) handle(req *promptRequest) {
 		}
 		return
 	}
-	log.Printf("[DEBUG] Prompt response: stopReason=%s, text length=%d", promptResp.StopReason, contentBuilder.Len())
-
-	text := contentBuilder.String()
-	if text != "" {
-		preview := text
-		if len(preview) > 200 {
-			preview = preview[:200]
-		}
-		log.Printf("[DEBUG] Writing response to channel: text length=%d, preview=%q", len(text), preview)
-		if err := writer.Write(text, true); err != nil {
-			log.Printf("[ERROR] Failed to write response to channel: %v", err)
-		}
-	} else {
-		log.Printf("[DEBUG] No content received from ACP")
-		if err := writer.Write("", true); err != nil {
-			log.Printf("[ERROR] Failed to write empty response to channel: %v", err)
-		}
+	if err := writer.Write("", true); err != nil {
+		log.Printf("[ERROR] Failed to finalize write: %v", err)
 	}
 }
 

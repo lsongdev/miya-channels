@@ -117,6 +117,9 @@ func (w *TelegramWriter) splitAndSend(text string, isFirstChunkEdit bool) error 
 }
 
 func (w *TelegramWriter) Write(s string, done bool) error {
+	if done && s == "" && w.messageID == 0 {
+		return nil
+	}
 	w.buffer += s
 
 	if w.messageID == 0 {
@@ -125,14 +128,10 @@ func (w *TelegramWriter) Write(s string, done bool) error {
 			Action: "typing",
 		})
 
-		if done {
-			html := tgmd.Convert(w.buffer)
-			if len(html) >= maxMsgLen {
-				err := w.splitAndSend(w.buffer, false)
-				w.buffer = ""
-				w.messageID = 0
-				return err
-			}
+		if done && len(tgmd.Convert(w.buffer)) >= maxMsgLen {
+			err := w.splitAndSend(w.buffer, false)
+			w.buffer = ""
+			return err
 		}
 
 		msg, err := w.bot.SendMessage(&telegram.MessageRequest{
@@ -143,9 +142,11 @@ func (w *TelegramWriter) Write(s string, done bool) error {
 			return err
 		}
 		w.messageID = msg.MessageID
-		if !done {
-			return nil
+		if done {
+			w.buffer = ""
+			w.messageID = 0
 		}
+		return nil
 	}
 
 	html := tgmd.Convert(w.buffer)
