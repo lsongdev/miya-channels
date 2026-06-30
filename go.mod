@@ -1,4 +1,4 @@
-module github.com/lsongdev/miya
+module github.com/lsongdev/miya-channels
 
 go 1.26.1
 

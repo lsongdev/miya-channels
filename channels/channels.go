@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/lsongdev/miya/config"
+	"github.com/lsongdev/miya-channels/config"
 )
 
 type Writer interface {

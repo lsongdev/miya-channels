@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/lsongdev/miya/config"
+	"github.com/lsongdev/miya-channels/config"
 	"github.com/lsongdev/wechatbot-go/wechatbot"
 )
 

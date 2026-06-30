@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/lsongdev/miya-agents/acp"
-	"github.com/lsongdev/miya/channels"
-	"github.com/lsongdev/miya/config"
+	"github.com/lsongdev/miya-channels/channels"
+	"github.com/lsongdev/miya-channels/config"
 )
 
 type acpSession struct {
