@@ -16,26 +16,20 @@ import (
 	"github.com/lsongdev/miya/config"
 )
 
-type promptResult struct {
-	text string
-	err  error
-}
-
 type acpSession struct {
 	sessionID acp.SessionID
 }
 
 type acpWorker struct {
 	client   *acp.Client
+	cm       *channels.ChannelManager
 	sessions map[string]*acpSession
 	mu       sync.Mutex
 	requests chan *promptRequest
 }
 
 type promptRequest struct {
-	msg    channels.IncomingMessage
-	cm     *channels.ChannelManager
-	result chan promptResult
+	msg channels.IncomingMessage
 }
 
 func main() {
@@ -77,6 +71,7 @@ func main() {
 
 	worker := &acpWorker{
 		client:   client,
+		cm:       cm,
 		sessions: make(map[string]*acpSession),
 		requests: make(chan *promptRequest, 32),
 	}
@@ -98,11 +93,7 @@ func main() {
 			return
 
 		case msg := <-cm.Incoming:
-			req := &promptRequest{
-				msg:    msg,
-				cm:     cm,
-				result: make(chan promptResult, 1),
-			}
+			req := &promptRequest{msg: msg}
 			worker.requests <- req
 		}
 	}
@@ -121,13 +112,32 @@ func (w *acpWorker) run(ctx context.Context) {
 
 func (w *acpWorker) handle(req *promptRequest) {
 	msg := req.msg
-	cm := req.cm
+	cm := w.cm
 
 	log.Printf("[DEBUG] handleMessage: from=%s who=%s content=%q", msg.From, msg.Who, msg.Content)
 
 	writer, err := cm.CreateReplyWriter(msg.From, msg.ReplyTo)
 	if err != nil {
 		log.Printf("Error creating writer for %s/%s: %v", msg.From, msg.ReplyTo, err)
+		return
+	}
+
+	key := msg.From + ":" + msg.Who
+
+	switch {
+	case msg.Content == "/stop":
+		w.closeSession(key)
+		writer.Write("Session stopped.", true)
+		return
+
+	case msg.Content == "/new":
+		w.closeSession(key)
+		session, err := w.createSession(key, msg.From, msg.Who)
+		if err != nil {
+			writer.Write(fmt.Sprintf("Failed to create session: %v", err), true)
+			return
+		}
+		writer.Write(fmt.Sprintf("New session created: %s", session.sessionID), true)
 		return
 	}
 
@@ -142,6 +152,7 @@ func (w *acpWorker) handle(req *promptRequest) {
 
 	w.client.OnNotification(func(method string, params json.RawMessage) {
 		if method != "session/update" {
+			log.Println("[DEBUG] Ignoring notification", method, "params:", string(params))
 			return
 		}
 		var raw struct {
@@ -192,6 +203,36 @@ func (w *acpWorker) handle(req *promptRequest) {
 	if err := writer.Write("", true); err != nil {
 		log.Printf("[ERROR] Failed to finalize write: %v", err)
 	}
+}
+
+func (w *acpWorker) closeSession(key string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if s, ok := w.sessions[key]; ok {
+		w.client.CloseSession(&acp.CloseSessionRequest{SessionID: s.sessionID})
+		log.Printf("[DEBUG] Closed session %s for %s", s.sessionID, key)
+		delete(w.sessions, key)
+	} else {
+		log.Printf("[DEBUG] No session to close for %s", key)
+	}
+}
+
+func (w *acpWorker) createSession(key, channel, who string) (*acpSession, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	cwd, _ := os.Getwd()
+	log.Printf("[DEBUG] Creating new session for %s", key)
+	sessResp, err := w.client.NewSession(&acp.NewSessionRequest{
+		Cwd:        cwd,
+		McpServers: []acp.McpServer{},
+	})
+	if err != nil {
+		return nil, err
+	}
+	s := &acpSession{sessionID: sessResp.SessionID}
+	w.sessions[key] = s
+	log.Printf("[DEBUG] New session %s for %s", s.sessionID, key)
+	return s, nil
 }
 
 func (w *acpWorker) getOrCreateSession(channel, who string) (*acpSession, error) {
