@@ -74,6 +74,28 @@ type TelegramWriter struct {
 	buffer    string
 }
 
+func (w *TelegramWriter) editText(text, fallbackText string) error {
+	_, err := w.bot.EditMessageText(&telegram.EditMessageTextRequest{
+		ChatID:    w.chatID,
+		MessageID: w.messageID,
+		Text:      text,
+		ParseMode: "HTML",
+	})
+	if err != nil {
+		log.Printf("[ERROR] EditMessageText: %v", err)
+		msg, err2 := w.bot.SendMessage(&telegram.MessageRequest{
+			ChatID: w.chatID,
+			Text:   fallbackText,
+		})
+		if err2 != nil {
+			log.Printf("[ERROR] SendMessage (fallback): %v", err2)
+			return err2
+		}
+		w.messageID = msg.MessageID
+	}
+	return nil
+}
+
 func (w *TelegramWriter) Write(s string, done bool) error {
 	if done && s == "" && w.messageID == 0 {
 		return nil
@@ -105,44 +127,14 @@ func (w *TelegramWriter) Write(s string, done bool) error {
 	html := tgmd.Convert(w.buffer)
 
 	if !done && len(w.buffer)%20 == 0 {
-		_, err := w.bot.EditMessageText(&telegram.EditMessageTextRequest{
-			ChatID:    w.chatID,
-			MessageID: w.messageID,
-			Text:      html,
-			ParseMode: "HTML",
-		})
-		if err != nil {
-			log.Printf("[ERROR] EditMessageText (live): %v", err)
-			msg, err2 := w.bot.SendMessage(&telegram.MessageRequest{
-				ChatID: w.chatID,
-				Text:   w.buffer,
-			})
-			if err2 != nil {
-				log.Printf("[ERROR] SendMessage (live fallback): %v", err2)
-				return err2
-			}
-			w.messageID = msg.MessageID
+		if err := w.editText(html, w.buffer); err != nil {
+			return err
 		}
 	}
 
 	if done {
-		_, err := w.bot.EditMessageText(&telegram.EditMessageTextRequest{
-			ChatID:    w.chatID,
-			MessageID: w.messageID,
-			Text:      html,
-			ParseMode: "HTML",
-		})
-		if err != nil {
-			log.Printf("[ERROR] EditMessageText (final): %v, sending new message", err)
-			msg, err2 := w.bot.SendMessage(&telegram.MessageRequest{
-				ChatID: w.chatID,
-				Text:   html,
-			})
-			if err2 != nil {
-				log.Printf("[ERROR] SendMessage (final fallback): %v", err2)
-				return err2
-			}
-			w.messageID = msg.MessageID
+		if err := w.editText(html, html); err != nil {
+			return err
 		}
 		w.buffer = ""
 		w.messageID = 0
