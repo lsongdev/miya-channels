@@ -113,6 +113,15 @@ func (w *TelegramWriter) Write(s string, done bool) error {
 		})
 		if err != nil {
 			log.Printf("[ERROR] EditMessageText (live): %v", err)
+			msg, err2 := w.bot.SendMessage(&telegram.MessageRequest{
+				ChatID: w.chatID,
+				Text:   w.buffer,
+			})
+			if err2 != nil {
+				log.Printf("[ERROR] SendMessage (live fallback): %v", err2)
+				return err2
+			}
+			w.messageID = msg.MessageID
 		}
 	}
 
@@ -124,8 +133,16 @@ func (w *TelegramWriter) Write(s string, done bool) error {
 			ParseMode: "HTML",
 		})
 		if err != nil {
-			log.Printf("[ERROR] EditMessageText (final): %v", err)
-			return err
+			log.Printf("[ERROR] EditMessageText (final): %v, sending new message", err)
+			msg, err2 := w.bot.SendMessage(&telegram.MessageRequest{
+				ChatID: w.chatID,
+				Text:   html,
+			})
+			if err2 != nil {
+				log.Printf("[ERROR] SendMessage (final fallback): %v", err2)
+				return err2
+			}
+			w.messageID = msg.MessageID
 		}
 		w.buffer = ""
 		w.messageID = 0
