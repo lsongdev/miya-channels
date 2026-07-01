@@ -74,48 +74,6 @@ type TelegramWriter struct {
 	buffer    string
 }
 
-const maxMsgLen = 4000
-
-func (w *TelegramWriter) sendChunkHTML(chunkHTML string, isFirst bool) error {
-	if isFirst && w.messageID != 0 {
-		_, err := w.bot.EditMessageText(&telegram.EditMessageTextRequest{
-			ChatID:    w.chatID,
-			MessageID: w.messageID,
-			Text:      chunkHTML,
-			ParseMode: "HTML",
-		})
-		return err
-	}
-	_, err := w.bot.SendMessage(&telegram.MessageRequest{
-		ChatID: w.chatID,
-		Text:   chunkHTML,
-	})
-	return err
-}
-
-func (w *TelegramWriter) splitAndSend(text string, isFirstChunkEdit bool) error {
-	runes := []rune(text)
-	for i := 0; i < len(runes); {
-		lo, hi := i+1, len(runes)
-		for lo < hi {
-			mid := (lo + hi + 1) / 2
-			chunkHTML := tgmd.Convert(string(runes[i:mid]))
-			if len(chunkHTML) <= maxMsgLen {
-				lo = mid
-			} else {
-				hi = mid - 1
-			}
-		}
-		chunk := string(runes[i:lo])
-		chunkHTML := tgmd.Convert(chunk)
-		if err := w.sendChunkHTML(chunkHTML, isFirstChunkEdit && i == 0); err != nil {
-			return err
-		}
-		i = lo
-	}
-	return nil
-}
-
 func (w *TelegramWriter) Write(s string, done bool) error {
 	if done && s == "" && w.messageID == 0 {
 		return nil
@@ -128,17 +86,12 @@ func (w *TelegramWriter) Write(s string, done bool) error {
 			Action: "typing",
 		})
 
-		if done && len(tgmd.Convert(w.buffer)) >= maxMsgLen {
-			err := w.splitAndSend(w.buffer, false)
-			w.buffer = ""
-			return err
-		}
-
 		msg, err := w.bot.SendMessage(&telegram.MessageRequest{
 			ChatID: w.chatID,
 			Text:   w.buffer,
 		})
 		if err != nil {
+			log.Printf("[ERROR] SendMessage (initial): %v", err)
 			return err
 		}
 		w.messageID = msg.MessageID
@@ -150,7 +103,8 @@ func (w *TelegramWriter) Write(s string, done bool) error {
 	}
 
 	html := tgmd.Convert(w.buffer)
-	if !done && len(w.buffer)%20 == 0 && len(html) < maxMsgLen {
+
+	if !done && len(w.buffer)%20 == 0 {
 		_, err := w.bot.EditMessageText(&telegram.EditMessageTextRequest{
 			ChatID:    w.chatID,
 			MessageID: w.messageID,
@@ -158,27 +112,20 @@ func (w *TelegramWriter) Write(s string, done bool) error {
 			ParseMode: "HTML",
 		})
 		if err != nil {
-			return err
+			log.Printf("[ERROR] EditMessageText (live): %v", err)
 		}
 	}
 
 	if done {
-		html := tgmd.Convert(w.buffer)
-		if len(html) >= maxMsgLen {
-			err := w.splitAndSend(w.buffer, true)
-			if err != nil {
-				return err
-			}
-		} else {
-			_, err := w.bot.EditMessageText(&telegram.EditMessageTextRequest{
-				ChatID:    w.chatID,
-				MessageID: w.messageID,
-				Text:      html,
-				ParseMode: "HTML",
-			})
-			if err != nil {
-				return err
-			}
+		_, err := w.bot.EditMessageText(&telegram.EditMessageTextRequest{
+			ChatID:    w.chatID,
+			MessageID: w.messageID,
+			Text:      html,
+			ParseMode: "HTML",
+		})
+		if err != nil {
+			log.Printf("[ERROR] EditMessageText (final): %v", err)
+			return err
 		}
 		w.buffer = ""
 		w.messageID = 0
