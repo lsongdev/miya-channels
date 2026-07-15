@@ -25,17 +25,16 @@ func NewWeChatChannelFactory() ChannelFactory {
 		if err := json.Unmarshal(rawConfig, &cfg); err != nil {
 			return nil, err
 		}
+		if cfg.Token == "" {
+			return nil, fmt.Errorf("wechat token missing; complete WeChat login before starting the channel service")
+		}
 		bot := wechatbot.NewBot(&cfg)
-		ch := &WeChatChannel{
+		return &WeChatChannel{
 			bot:      bot,
 			cfg:      &cfg,
 			replyMap: make(map[string]*wechatbot.ReplyMessage),
 			options:  opts,
-		}
-		if err := ch.login(context.Background(), false); err != nil {
-			return nil, err
-		}
-		return ch, nil
+		}, nil
 	}
 }
 
@@ -72,12 +71,23 @@ func qrcodeImage(content string) string {
 	return "https://m.maoyan.com/qr?text=" + url.QueryEscape(content)
 }
 
-func (w *WeChatChannel) login(ctx context.Context, force bool) error {
-	if w.cfg.Token != "" && !force {
-		w.emit("authenticated", nil, nil)
-		return nil
+func LoginWeChat(ctx context.Context, rawConfig json.RawMessage, opts ChannelOptions) (*wechatbot.Config, error) {
+	var cfg wechatbot.Config
+	if err := json.Unmarshal(rawConfig, &cfg); err != nil {
+		return nil, err
 	}
+	login := &WeChatChannel{
+		bot:     wechatbot.NewBot(&cfg),
+		cfg:     &cfg,
+		options: opts,
+	}
+	if err := login.login(ctx, true); err != nil {
+		return nil, err
+	}
+	return login.cfg, nil
+}
 
+func (w *WeChatChannel) login(ctx context.Context, _ bool) error {
 	qrcode, err := w.bot.GetBotQRCode()
 	if err != nil {
 		w.emit("error", nil, err)
