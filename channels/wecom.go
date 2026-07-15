@@ -12,7 +12,7 @@ type WeComChannel struct {
 }
 
 func NewWeComChannelFactory() ChannelFactory {
-	return func(c json.RawMessage) (ch Channel, err error) {
+	return func(c json.RawMessage, _ ChannelOptions) (ch Channel, err error) {
 		var cfg wecom.WeComBotConfig
 		err = json.Unmarshal(c, &cfg)
 		ch = &WeComChannel{

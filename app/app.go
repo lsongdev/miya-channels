@@ -21,6 +21,7 @@ type AgentClientFactory func(*config.Config) (*acp.Client, string, error)
 type Options struct {
 	Config    *config.Config
 	NewClient AgentClientFactory
+	OnEvent   func(channels.ChannelEvent)
 }
 
 type acpSession struct {
@@ -78,7 +79,9 @@ func Run(ctx context.Context, opts Options) error {
 		log.Printf("Connected to ACP agent: %s v%s", initResp.AgentInfo.Name, initResp.AgentInfo.Version)
 	}
 
-	cm := channels.NewChannelManager(cfg)
+	cm := channels.NewChannelManagerWithOptions(cfg, channels.ChannelOptions{
+		Emit: opts.OnEvent,
+	})
 	if len(cm.ListChannels()) == 0 {
 		return fmt.Errorf("no channels configured")
 	}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"time"
 
 	"github.com/lsongdev/miya-channels/config"
 	"github.com/lsongdev/wechatbot-go/wechatbot"
@@ -13,27 +15,119 @@ type WeChatChannel struct {
 	bot      *wechatbot.WeChatBot
 	cfg      *wechatbot.Config
 	replyMap map[string]*wechatbot.ReplyMessage
+	options  ChannelOptions
 }
 
 func NewWeChatChannelFactory() ChannelFactory {
-	return func(rawConfig json.RawMessage) (channel Channel, err error) {
+	return func(rawConfig json.RawMessage, opts ChannelOptions) (channel Channel, err error) {
 		var cfg wechatbot.Config
 		if err := json.Unmarshal(rawConfig, &cfg); err != nil {
 			return nil, err
 		}
 		bot := wechatbot.NewBot(&cfg)
-		bot.Login(context.Background(), false)
-		channel = &WeChatChannel{
+		ch := &WeChatChannel{
 			bot:      bot,
 			cfg:      &cfg,
 			replyMap: make(map[string]*wechatbot.ReplyMessage),
+			options:  opts,
 		}
-		return channel, nil
+		if err := ch.login(context.Background(), false); err != nil {
+			return nil, err
+		}
+		return ch, nil
+	}
+}
+
+func (w *WeChatChannel) emit(status string, qrcode *wechatbot.QRCodeResponse, err error) {
+	if w.options.Emit == nil {
+		if qrcode != nil && status == "qrcode" {
+			log.Println("WeChat QRCode:", qrcode.QRCodeImgContent)
+		} else if err != nil {
+			log.Printf("WeChat login %s: %v", status, err)
+		} else if status != "" {
+			log.Println("WeChat login:", status)
+		}
+	}
+	event := ChannelEvent{
+		Channel: "wechat",
+		Type:    "login",
+		Status:  status,
+	}
+	if qrcode != nil {
+		event.QRCode = qrcode.QRCode
+		event.QRCodeURL = qrcode.QRCodeImgContent
+	}
+	if err != nil {
+		event.Error = err.Error()
+	}
+	w.options.emit(event)
+}
+
+func (w *WeChatChannel) login(ctx context.Context, force bool) error {
+	if w.cfg.Token != "" && !force {
+		w.emit("authenticated", nil, nil)
+		return nil
+	}
+
+	qrcode, err := w.bot.GetBotQRCode()
+	if err != nil {
+		w.emit("error", nil, err)
+		return err
+	}
+	w.emit("qrcode", qrcode, nil)
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	lastStatus := ""
+	for {
+		select {
+		case <-ctx.Done():
+			err := ctx.Err()
+			w.emit("cancelled", qrcode, err)
+			return err
+		case <-ticker.C:
+		}
+
+		resp, err := w.bot.GetQRCodeStatus(qrcode.QRCode)
+		if err != nil {
+			w.emit("error", qrcode, err)
+			return err
+		}
+		if resp.Status != "" && resp.Status != lastStatus {
+			w.emit(resp.Status, qrcode, nil)
+			lastStatus = resp.Status
+		}
+		switch resp.Status {
+		case "wait", "scaned":
+			continue
+		case "confirmed":
+			w.cfg.Token = resp.BotToken
+			if resp.BaseURL != "" {
+				w.cfg.BaseURL = resp.BaseURL
+			}
+			w.bot.Token = resp.BotToken
+			return w.SaveConfig()
+		case "expired":
+			err := fmt.Errorf("qrcode expired")
+			w.emit("expired", qrcode, err)
+			return err
+		default:
+			err := fmt.Errorf("qrcode %s", resp.Status)
+			w.emit("error", qrcode, err)
+			return err
+		}
 	}
 }
 
 func (w *WeChatChannel) SaveConfig() error {
-	c, _ := config.LoadConfig()
+	c, err := config.LoadConfig()
+	if err != nil || c == nil {
+		c = &config.Config{}
+	}
+	if c.Channels == nil {
+		c.Channels = map[string]any{}
+	}
 	d, _ := json.Marshal(w.cfg)
 	c.Channels["wechat"] = d
 	return c.Save()

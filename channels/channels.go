@@ -26,12 +26,32 @@ type IncomingMessage struct {
 	Content string
 }
 
-type ChannelFactory func(config json.RawMessage) (Channel, error)
+type ChannelEvent struct {
+	Channel   string `json:"channel"`
+	Type      string `json:"type"`
+	Status    string `json:"status,omitempty"`
+	QRCode    string `json:"qrcode,omitempty"`
+	QRCodeURL string `json:"qrcodeUrl,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+type ChannelOptions struct {
+	Emit func(ChannelEvent)
+}
+
+func (opts ChannelOptions) emit(event ChannelEvent) {
+	if opts.Emit != nil {
+		opts.Emit(event)
+	}
+}
+
+type ChannelFactory func(config json.RawMessage, opts ChannelOptions) (Channel, error)
 
 type ChannelManager struct {
 	config   *config.Config
 	channels map[string]Channel
 	Incoming chan IncomingMessage
+	options  ChannelOptions
 }
 
 var factories map[string]ChannelFactory
@@ -47,9 +67,14 @@ func init() {
 }
 
 func NewChannelManager(cfg *config.Config) (manager *ChannelManager) {
+	return NewChannelManagerWithOptions(cfg, ChannelOptions{})
+}
+
+func NewChannelManagerWithOptions(cfg *config.Config, opts ChannelOptions) (manager *ChannelManager) {
 	manager = &ChannelManager{
 		channels: make(map[string]Channel),
 		Incoming: make(chan IncomingMessage, 100),
+		options:  opts,
 	}
 	for name, channelConfig := range cfg.Channels {
 		factory, ok := factories[name]
@@ -62,7 +87,7 @@ func NewChannelManager(cfg *config.Config) (manager *ChannelManager) {
 			log.Printf("Error encoding channel %s config: %v", name, err)
 			continue
 		}
-		channel, err := factory(rawConfig)
+		channel, err := factory(rawConfig, opts)
 		if err != nil {
 			log.Printf("Error creating channel %s: %v", name, err)
 			continue

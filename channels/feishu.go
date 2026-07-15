@@ -15,7 +15,7 @@ type FeishuChannel struct {
 }
 
 func NewFeishuChannelFactory() ChannelFactory {
-	return func(config json.RawMessage) (Channel, error) {
+	return func(config json.RawMessage, _ ChannelOptions) (Channel, error) {
 		var cfg feishu.Config
 		if err := json.Unmarshal(config, &cfg); err != nil {
 			return nil, err

@@ -25,7 +25,7 @@ type TelegramChannel struct {
 }
 
 func NewTelegramChannelFactory() ChannelFactory {
-	return func(config json.RawMessage) (Channel, error) {
+	return func(config json.RawMessage, _ ChannelOptions) (Channel, error) {
 		var cfg telegramConfig
 		if err := json.Unmarshal(config, &cfg); err != nil {
 			return nil, err
