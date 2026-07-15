@@ -51,6 +51,13 @@ func Run(ctx context.Context, opts Options) error {
 		}
 	}
 
+	cm := channels.NewChannelManagerWithOptions(cfg, channels.ChannelOptions{
+		Emit: opts.OnEvent,
+	})
+	if len(cm.ListChannels()) == 0 {
+		return fmt.Errorf("no channels configured")
+	}
+
 	newClient := opts.NewClient
 	if newClient == nil {
 		newClient = DefaultAgentClient
@@ -77,13 +84,6 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	if initResp.AgentInfo != nil {
 		log.Printf("Connected to ACP agent: %s v%s", initResp.AgentInfo.Name, initResp.AgentInfo.Version)
-	}
-
-	cm := channels.NewChannelManagerWithOptions(cfg, channels.ChannelOptions{
-		Emit: opts.OnEvent,
-	})
-	if len(cm.ListChannels()) == 0 {
-		return fmt.Errorf("no channels configured")
 	}
 
 	if err := cm.Start(ctx); err != nil {
