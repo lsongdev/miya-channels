@@ -34,6 +34,7 @@ Configuration file: `~/.miya/config.json`
   "agents": [{
     "id": "miya",
     "name": "Miya Agents",
+    "enabled": true,
     "type": "stdio",
     "command": "miya-agents",
     "args": []

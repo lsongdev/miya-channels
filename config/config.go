@@ -33,6 +33,9 @@ func LoadConfig() (cfg *Config, err error) {
 func DefaultAgent(c *Config) (*AgentConfig, error) {
 	for i := range c.Agents {
 		agent := &c.Agents[i]
+		if !agent.IsEnabled() {
+			continue
+		}
 		if agent.Type == "" || agent.Type == "stdio" {
 			if agent.Command == "" {
 				continue
