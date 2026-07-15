@@ -27,12 +27,13 @@ type IncomingMessage struct {
 }
 
 type ChannelEvent struct {
-	Channel   string `json:"channel"`
-	Type      string `json:"type"`
-	Status    string `json:"status,omitempty"`
-	QRCode    string `json:"qrcode,omitempty"`
-	QRCodeURL string `json:"qrcodeUrl,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Channel     string `json:"channel"`
+	Type        string `json:"type"`
+	Status      string `json:"status,omitempty"`
+	QRCode      string `json:"qrcode,omitempty"`
+	QRCodeURL   string `json:"qrcodeUrl,omitempty"`
+	QRCodeImage string `json:"qrcodeImage,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 type ChannelOptions struct {

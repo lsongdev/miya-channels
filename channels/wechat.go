@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"time"
 
 	"github.com/lsongdev/miya-channels/config"
@@ -56,11 +57,19 @@ func (w *WeChatChannel) emit(status string, qrcode *wechatbot.QRCodeResponse, er
 	if qrcode != nil {
 		event.QRCode = qrcode.QRCode
 		event.QRCodeURL = qrcode.QRCodeImgContent
+		event.QRCodeImage = qrcodeImage(qrcode.QRCodeImgContent)
 	}
 	if err != nil {
 		event.Error = err.Error()
 	}
 	w.options.emit(event)
+}
+
+func qrcodeImage(content string) string {
+	if content == "" {
+		return ""
+	}
+	return "https://m.maoyan.com/qr?text=" + url.QueryEscape(content)
 }
 
 func (w *WeChatChannel) login(ctx context.Context, force bool) error {
