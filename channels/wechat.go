@@ -126,7 +126,7 @@ func (w *WeChatChannel) login(ctx context.Context, _ bool) error {
 				w.cfg.BaseURL = resp.BaseURL
 			}
 			w.bot.Token = resp.BotToken
-			return w.SaveConfig()
+			return nil
 		case "expired":
 			err := fmt.Errorf("qrcode expired")
 			w.emit("expired", qrcode, err)
