@@ -24,6 +24,7 @@ type acpWorker struct {
 	client   *acp.Client
 	cm       *channels.ChannelManager
 	sessions map[string]*acpSession
+	writers  map[acp.SessionID]channels.Writer
 	mu       sync.Mutex
 	requests chan *promptRequest
 }
@@ -73,8 +74,10 @@ func main() {
 		client:   client,
 		cm:       cm,
 		sessions: make(map[string]*acpSession),
+		writers:  make(map[acp.SessionID]channels.Writer),
 		requests: make(chan *promptRequest, 32),
 	}
+	client.OnNotification(worker.handleNotification)
 
 	go worker.run(ctx)
 
@@ -150,41 +153,8 @@ func (w *acpWorker) handle(req *promptRequest) {
 		return
 	}
 
-	w.client.OnNotification(func(method string, params json.RawMessage) {
-		if method != "session/update" {
-			log.Println("[DEBUG] Ignoring notification", method, "params:", string(params))
-			return
-		}
-		var raw struct {
-			SessionID string          `json:"sessionId"`
-			Update    json.RawMessage `json:"update"`
-		}
-		if err := json.Unmarshal(params, &raw); err != nil {
-			return
-		}
-		var update struct {
-			SessionUpdate string          `json:"sessionUpdate"`
-			Content       json.RawMessage `json:"content,omitempty"`
-		}
-		if err := json.Unmarshal(raw.Update, &update); err != nil {
-			return
-		}
-		if update.SessionUpdate != "agent_message_chunk" {
-			return
-		}
-		var content struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}
-		if err := json.Unmarshal(update.Content, &content); err != nil {
-			return
-		}
-		if content.Type == "text" && content.Text != "" {
-			if err := writer.Write(content.Text, false); err != nil {
-				log.Printf("[ERROR] Failed to write chunk: %v", err)
-			}
-		}
-	})
+	w.setWriter(session.sessionID, writer)
+	defer w.clearWriter(session.sessionID)
 
 	log.Printf("[DEBUG] Sending Prompt (session=%s)...", session.sessionID)
 	_, err = w.client.Prompt(&acp.PromptRequest{
@@ -203,6 +173,65 @@ func (w *acpWorker) handle(req *promptRequest) {
 	if err := writer.Write("", true); err != nil {
 		log.Printf("[ERROR] Failed to finalize write: %v", err)
 	}
+}
+
+func (w *acpWorker) handleNotification(method string, params json.RawMessage) {
+	if method != "session/update" {
+		log.Println("[DEBUG] Ignoring notification", method, "params:", string(params))
+		return
+	}
+	var raw struct {
+		SessionID acp.SessionID   `json:"sessionId"`
+		Update    json.RawMessage `json:"update"`
+	}
+	if err := json.Unmarshal(params, &raw); err != nil {
+		return
+	}
+	var update struct {
+		SessionUpdate string          `json:"sessionUpdate"`
+		Content       json.RawMessage `json:"content,omitempty"`
+	}
+	if err := json.Unmarshal(raw.Update, &update); err != nil {
+		return
+	}
+	if update.SessionUpdate != "agent_message_chunk" {
+		return
+	}
+	var content struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(update.Content, &content); err != nil {
+		return
+	}
+	if content.Type != "text" || content.Text == "" {
+		return
+	}
+	writer := w.writerFor(raw.SessionID)
+	if writer == nil {
+		return
+	}
+	if err := writer.Write(content.Text, false); err != nil {
+		log.Printf("[ERROR] Failed to write chunk: %v", err)
+	}
+}
+
+func (w *acpWorker) setWriter(sessionID acp.SessionID, writer channels.Writer) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.writers[sessionID] = writer
+}
+
+func (w *acpWorker) clearWriter(sessionID acp.SessionID) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.writers, sessionID)
+}
+
+func (w *acpWorker) writerFor(sessionID acp.SessionID) channels.Writer {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.writers[sessionID]
 }
 
 func (w *acpWorker) closeSession(key string) {
