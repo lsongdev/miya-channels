@@ -11,10 +11,14 @@ require (
 )
 
 require (
+	github.com/PuerkitoBio/goquery v1.11.0 // indirect
+	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/lsongdev/jsonrpc-go v0.0.0-20260311082853-00cacf7253d3 // indirect
 	github.com/yuin/goldmark v1.7.16 // indirect
+	golang.org/x/net v0.47.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 replace github.com/lsongdev/miya-agents => ../miya-agents

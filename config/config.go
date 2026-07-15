@@ -36,14 +36,14 @@ func DefaultAgent(c *Config) (*AgentConfig, error) {
 		if !agent.IsEnabled() {
 			continue
 		}
-		if agent.Type == "" || agent.Type == "stdio" {
-			if agent.Command == "" {
+		if agent.Type == "" || agent.Type == "stdio" || agent.Type == "builtin" || agent.Type == "inprocess" {
+			if agent.Command == "" && agent.Type != "builtin" && agent.Type != "inprocess" {
 				continue
 			}
 			return agent, nil
 		}
 	}
-	return nil, fmt.Errorf("no stdio ACP agent configured")
+	return nil, fmt.Errorf("no enabled ACP agent configured")
 }
 
 func Save(c *Config) error {
