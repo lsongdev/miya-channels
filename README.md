@@ -31,10 +31,13 @@ Configuration file: `~/.miya/config.json`
 
 ```json
 {
-  "acp": {
+  "agents": [{
+    "id": "miya",
+    "name": "Miya Agents",
+    "type": "stdio",
     "command": "miya-agents",
     "args": []
-  },
+  }],
   "channels": {
     "telegram": {
       "token": "your-bot-token"

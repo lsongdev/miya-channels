@@ -57,7 +57,12 @@ func NewChannelManager(cfg *config.Config) (manager *ChannelManager) {
 			log.Printf("Channel factory not found: %s", name)
 			continue
 		}
-		channel, err := factory(channelConfig)
+		rawConfig, err := json.Marshal(channelConfig)
+		if err != nil {
+			log.Printf("Error encoding channel %s config: %v", name, err)
+			continue
+		}
+		channel, err := factory(rawConfig)
 		if err != nil {
 			log.Printf("Error creating channel %s: %v", name, err)
 			continue

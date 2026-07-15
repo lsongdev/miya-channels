@@ -5,19 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	agentsconfig "github.com/lsongdev/miya-agents/config"
 )
 
-// ACPConfig contains ACP stdio command settings.
-type ACPConfig struct {
-	Command string   `json:"command"`
-	Args    []string `json:"args,omitempty"`
-}
-
-// Config is the root configuration structure.
-type Config struct {
-	ACP      *ACPConfig                 `json:"acp,omitempty" yaml:"acp,omitempty"`
-	Channels map[string]json.RawMessage `json:"channels,omitempty" yaml:"channels,omitempty"`
-}
+type Config = agentsconfig.Config
+type AgentConfig = agentsconfig.ACPAgentConfig
 
 var ConfigPath = filepath.Join(os.Getenv("HOME"), ".miya")
 var ConfigFile = filepath.Join(ConfigPath, "config.json")
@@ -37,11 +30,23 @@ func LoadConfig() (cfg *Config, err error) {
 	return
 }
 
-func (c *Config) Save() error {
+func DefaultAgent(c *Config) (*AgentConfig, error) {
+	for i := range c.Agents {
+		agent := &c.Agents[i]
+		if agent.Type == "" || agent.Type == "stdio" {
+			if agent.Command == "" {
+				continue
+			}
+			return agent, nil
+		}
+	}
+	return nil, fmt.Errorf("no stdio ACP agent configured")
+}
+
+func Save(c *Config) error {
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	// log.Println(string(data))
 	return os.WriteFile(ConfigFile, data, 0644)
 }

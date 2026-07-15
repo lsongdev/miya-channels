@@ -13,5 +13,8 @@ require (
 require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/lsongdev/jsonrpc-go v0.0.0-20260311082853-00cacf7253d3 // indirect
 	github.com/yuin/goldmark v1.7.16 // indirect
 )
+
+replace github.com/lsongdev/miya-agents => ../miya-agents

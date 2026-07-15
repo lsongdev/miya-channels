@@ -6,8 +6,8 @@ github.com/kisielk/errcheck v1.5.0/go.mod h1:pFxgyoBC7bSaBwPgfKdkLd5X25qrDl4LWUI
 github.com/kisielk/gotool v1.0.0/go.mod h1:XhKaO+MFFWcvkIS/tQcRk01m1F5IRFswLeQ+oQHNcck=
 github.com/lsongdev/feishu-go v0.0.0-20260319163837-39674c462916 h1:FPAYQCfRcQJZ7d4DouXQ5eSY/Ssv/WFsgtRDrShmtBM=
 github.com/lsongdev/feishu-go v0.0.0-20260319163837-39674c462916/go.mod h1:Da/IlV+rc5g7zgQLwRBu0iSeDlq1LpP6NKZhb9kAETo=
-github.com/lsongdev/miya-agents v0.0.0-20260612032442-0e7c5fff6788 h1:5jGwhEW+/XvYGCUEqOWMBEQQ9mXWt0MSXwDKQy1YRMc=
-github.com/lsongdev/miya-agents v0.0.0-20260612032442-0e7c5fff6788/go.mod h1:GE0xgGCUq77L4MpDASyVxeSS6DKM/A20bsoW0ElvGBw=
+github.com/lsongdev/jsonrpc-go v0.0.0-20260311082853-00cacf7253d3 h1:AZVcHb8kfrZSOjzvHJuhZnrJ6AHlO+BCf2SKG2unHcc=
+github.com/lsongdev/jsonrpc-go v0.0.0-20260311082853-00cacf7253d3/go.mod h1:vCfliLQ2i77gJShOzr7mmiwN2a1Px0Jm8scFPsH5JOI=
 github.com/lsongdev/telegram-go v0.0.0-20260320025417-8942b286b9e9 h1:zq0rUkLB0Q2rf3ndw2HngNaupfS+Ev+Vgi5WWgeOIL8=
 github.com/lsongdev/telegram-go v0.0.0-20260320025417-8942b286b9e9/go.mod h1:hzoU65fDr/n158bgVzT8a9SxNao6v9WFbCHkZpRMT9M=
 github.com/lsongdev/wechatbot-go v0.0.0-20260324073854-535a867c66ad h1:92LoyhkbfMW0B+tcvVqjchL/EertaS6jMJlcjsH2LIU=

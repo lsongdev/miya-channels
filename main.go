@@ -39,7 +39,12 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	client, err := acp.DialStdio(cfg.ACP.Command, cfg.ACP.Args...)
+	agentConfig, err := config.DefaultAgent(cfg)
+	if err != nil {
+		log.Fatalf("Failed to select ACP agent: %v", err)
+	}
+
+	client, err := acp.DialStdio(agentConfig.Command, agentConfig.Args...)
 	if err != nil {
 		log.Fatalf("Failed to start ACP client: %v", err)
 	}
@@ -81,7 +86,7 @@ func main() {
 
 	go worker.run(ctx)
 
-	log.Printf("Listening for messages (command: %s)...", cfg.ACP.Command)
+	log.Printf("Listening for messages (agent: %s, command: %s)...", agentConfig.ID, agentConfig.Command)
 
 	for {
 		select {
