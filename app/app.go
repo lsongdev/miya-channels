@@ -64,6 +64,8 @@ type promptRequest struct {
 	msg channels.IncomingMessage
 }
 
+const promptTimeout = 2 * time.Minute
+
 func newSessionStore() *sessionStore {
 	return &sessionStore{path: filepath.Join(config.ConfigPath, "channels", "sessions.json")}
 }
@@ -296,12 +298,7 @@ func (w *acpWorker) handle(req *promptRequest) {
 	defer w.clearReply(session.sessionID)
 
 	log.Printf("[DEBUG] Sending Prompt (session=%s)...", session.sessionID)
-	_, err = w.client.Prompt(&acp.PromptRequest{
-		SessionID: session.sessionID,
-		Prompt: []acp.ContentBlock{
-			{Type: "text", Text: msg.Content},
-		},
-	})
+	err = w.prompt(session.sessionID, msg.Content)
 	if err != nil {
 		log.Printf("[DEBUG] Prompt error: %v", err)
 		if err := writer.Write(fmt.Sprintf("Prompt error: %v", err), true); err != nil {
@@ -311,6 +308,36 @@ func (w *acpWorker) handle(req *promptRequest) {
 	}
 	if err := writer.Write("", true); err != nil {
 		log.Printf("[ERROR] Failed to finalize write: %v", err)
+	}
+}
+
+func (w *acpWorker) prompt(sessionID acp.SessionID, content string) error {
+	type result struct {
+		err error
+	}
+
+	done := make(chan result, 1)
+	start := time.Now()
+	go func() {
+		_, err := w.client.Prompt(&acp.PromptRequest{
+			SessionID: sessionID,
+			Prompt: []acp.ContentBlock{
+				{Type: "text", Text: content},
+			},
+		})
+		done <- result{err: err}
+	}()
+
+	select {
+	case res := <-done:
+		log.Printf("[DEBUG] Prompt completed (session=%s duration=%s)", sessionID, time.Since(start).Round(time.Millisecond))
+		return res.err
+	case <-time.After(promptTimeout):
+		log.Printf("[WARN] Prompt timed out (session=%s duration=%s)", sessionID, promptTimeout)
+		if err := w.client.CancelSession(sessionID); err != nil {
+			log.Printf("[WARN] Failed to cancel timed out session %s: %v", sessionID, err)
+		}
+		return fmt.Errorf("prompt timed out after %s", promptTimeout)
 	}
 }
 
@@ -324,6 +351,7 @@ func (w *acpWorker) handleNotification(method string, params json.RawMessage) {
 		Update    json.RawMessage `json:"update"`
 	}
 	if err := json.Unmarshal(params, &raw); err != nil {
+		log.Printf("[WARN] Failed to parse session/update envelope: %v", err)
 		return
 	}
 	var update struct {
@@ -331,13 +359,16 @@ func (w *acpWorker) handleNotification(method string, params json.RawMessage) {
 		Content       json.RawMessage `json:"content,omitempty"`
 	}
 	if err := json.Unmarshal(raw.Update, &update); err != nil {
+		log.Printf("[WARN] Failed to parse session/update payload for %s: %v", raw.SessionID, err)
 		return
 	}
+	log.Printf("[DEBUG] Session update received: session=%s type=%s", raw.SessionID, update.SessionUpdate)
 	if update.SessionUpdate != "agent_message_chunk" {
 		return
 	}
 	var content acp.ContentBlock
 	if err := json.Unmarshal(update.Content, &content); err != nil {
+		log.Printf("[WARN] Failed to parse agent message content for %s: %v", raw.SessionID, err)
 		return
 	}
 	switch content.Type {
@@ -345,6 +376,8 @@ func (w *acpWorker) handleNotification(method string, params json.RawMessage) {
 		w.handleTextContent(raw.SessionID, content.Text)
 	case "image", "audio", "resource", "resource_link":
 		w.handleFileContent(raw.SessionID, content)
+	default:
+		log.Printf("[DEBUG] Ignoring agent message content type=%s session=%s", content.Type, raw.SessionID)
 	}
 }
 
@@ -354,6 +387,7 @@ func (w *acpWorker) handleTextContent(sessionID acp.SessionID, text string) {
 	}
 	writer := w.writerFor(sessionID)
 	if writer == nil {
+		log.Printf("[WARN] Dropping text chunk for session %s: no active writer", sessionID)
 		return
 	}
 	if err := writer.Write(text, false); err != nil {
@@ -372,10 +406,12 @@ func (w *acpWorker) handleFileContent(sessionID acp.SessionID, content acp.Conte
 	}
 	writer := w.writerFor(sessionID)
 	if writer == nil {
+		log.Printf("[WARN] Dropping file content for session %s: no active writer", sessionID)
 		return
 	}
 	route, ok := w.routeFor(sessionID)
 	if !ok {
+		log.Printf("[WARN] Dropping file content for session %s: no reply route", sessionID)
 		return
 	}
 	delivery.Channel = route.channel
