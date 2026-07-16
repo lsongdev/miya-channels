@@ -2,11 +2,14 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
+	"mime"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,8 +36,14 @@ type acpWorker struct {
 	cm       *channels.ChannelManager
 	sessions map[string]*acpSession
 	writers  map[acp.SessionID]channels.Writer
+	routes   map[acp.SessionID]replyRoute
 	mu       sync.Mutex
 	requests chan *promptRequest
+}
+
+type replyRoute struct {
+	channel string
+	target  string
 }
 
 type promptRequest struct {
@@ -101,6 +110,7 @@ func Run(ctx context.Context, opts Options) error {
 		cm:       cm,
 		sessions: make(map[string]*acpSession),
 		writers:  make(map[acp.SessionID]channels.Writer),
+		routes:   make(map[acp.SessionID]replyRoute),
 		requests: make(chan *promptRequest, 32),
 	}
 	client.OnNotification(worker.handleNotification)
@@ -206,8 +216,8 @@ func (w *acpWorker) handle(req *promptRequest) {
 		return
 	}
 
-	w.setWriter(session.sessionID, writer)
-	defer w.clearWriter(session.sessionID)
+	w.setReply(session.sessionID, writer, replyRoute{channel: msg.From, target: msg.ReplyTo})
+	defer w.clearReply(session.sessionID)
 
 	log.Printf("[DEBUG] Sending Prompt (session=%s)...", session.sessionID)
 	_, err = w.client.Prompt(&acp.PromptRequest{
@@ -250,41 +260,178 @@ func (w *acpWorker) handleNotification(method string, params json.RawMessage) {
 	if update.SessionUpdate != "agent_message_chunk" {
 		return
 	}
-	var content struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
+	var content acp.ContentBlock
 	if err := json.Unmarshal(update.Content, &content); err != nil {
 		return
 	}
-	if content.Type != "text" || content.Text == "" {
+	switch content.Type {
+	case "text":
+		w.handleTextContent(raw.SessionID, content.Text)
+	case "image", "audio", "resource", "resource_link":
+		w.handleFileContent(raw.SessionID, content)
+	}
+}
+
+func (w *acpWorker) handleTextContent(sessionID acp.SessionID, text string) {
+	if text == "" {
 		return
 	}
-	writer := w.writerFor(raw.SessionID)
+	writer := w.writerFor(sessionID)
 	if writer == nil {
 		return
 	}
-	if err := writer.Write(content.Text, false); err != nil {
+	if err := writer.Write(text, false); err != nil {
 		log.Printf("[ERROR] Failed to write chunk: %v", err)
 	}
 }
 
-func (w *acpWorker) setWriter(sessionID acp.SessionID, writer channels.Writer) {
+func (w *acpWorker) handleFileContent(sessionID acp.SessionID, content acp.ContentBlock) {
+	delivery, ok, err := fileDelivery(content)
+	if err != nil {
+		log.Printf("[ERROR] Failed to prepare ACP file content: %v", err)
+		return
+	}
+	if !ok {
+		return
+	}
+	writer := w.writerFor(sessionID)
+	if writer == nil {
+		return
+	}
+	route, ok := w.routeFor(sessionID)
+	if !ok {
+		return
+	}
+	delivery.Channel = route.channel
+	delivery.Target = route.target
+	payload, err := json.Marshal(delivery)
+	if err != nil {
+		log.Printf("[ERROR] Failed to encode file payload: %v", err)
+		return
+	}
+	if err := w.cm.SendFile(delivery.Channel, delivery.Target, delivery.Type, string(payload)); err != nil {
+		log.Printf("[ERROR] Failed to send ACP file content: %v", err)
+		_ = writer.Write(fmt.Sprintf("\n[Attachment: %s]\n", delivery.URL), false)
+	}
+}
+
+type filePayload struct {
+	Type    string `json:"type"`
+	URL     string `json:"url"`
+	Caption string `json:"caption,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Mime    string `json:"mime,omitempty"`
+	Channel string `json:"-"`
+	Target  string `json:"-"`
+}
+
+func fileDelivery(content acp.ContentBlock) (filePayload, bool, error) {
+	url := ""
+	if content.URI != nil {
+		url = *content.URI
+	}
+	if url == "" && content.Data != "" {
+		path, err := writeInlineAttachment(content)
+		if err != nil {
+			return filePayload{}, false, err
+		}
+		url = "file://" + path
+	}
+	if url == "" {
+		return filePayload{}, false, nil
+	}
+
+	mimeType := content.MimeType
+	if mimeType == "" {
+		mimeType = mime.TypeByExtension(strings.ToLower(filepath.Ext(content.Name)))
+	}
+	typ := fileType(content.Type, mimeType)
+	caption := ""
+	if content.Title != nil {
+		caption = *content.Title
+	}
+	if caption == "" && content.Description != nil {
+		caption = *content.Description
+	}
+	if caption == "" {
+		caption = content.Name
+	}
+	return filePayload{
+		Type:    typ,
+		URL:     url,
+		Caption: caption,
+		Name:    content.Name,
+		Mime:    mimeType,
+	}, true, nil
+}
+
+func writeInlineAttachment(content acp.ContentBlock) (string, error) {
+	data, err := base64.StdEncoding.DecodeString(content.Data)
+	if err != nil {
+		return "", fmt.Errorf("decode inline attachment: %w", err)
+	}
+	name := content.Name
+	if name == "" {
+		name = "attachment" + extensionForMime(content.MimeType)
+	}
+	path := filepath.Join(os.TempDir(), "miya-channels", fmt.Sprintf("%d-%s", time.Now().UnixNano(), filepath.Base(name)))
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func extensionForMime(mimeType string) string {
+	if mimeType == "" {
+		return ""
+	}
+	if exts, err := mime.ExtensionsByType(mimeType); err == nil && len(exts) > 0 {
+		return exts[0]
+	}
+	return ""
+}
+
+func fileType(contentType, mimeType string) string {
+	switch {
+	case contentType == "image" || strings.HasPrefix(mimeType, "image/"):
+		return "image"
+	case strings.HasPrefix(mimeType, "video/"):
+		return "video"
+	case contentType == "audio" || strings.HasPrefix(mimeType, "audio/"):
+		return "audio"
+	default:
+		return "file"
+	}
+}
+
+func (w *acpWorker) setReply(sessionID acp.SessionID, writer channels.Writer, route replyRoute) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.writers[sessionID] = writer
+	w.routes[sessionID] = route
 }
 
-func (w *acpWorker) clearWriter(sessionID acp.SessionID) {
+func (w *acpWorker) clearReply(sessionID acp.SessionID) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	delete(w.writers, sessionID)
+	delete(w.routes, sessionID)
 }
 
 func (w *acpWorker) writerFor(sessionID acp.SessionID) channels.Writer {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.writers[sessionID]
+}
+
+func (w *acpWorker) routeFor(sessionID acp.SessionID) (replyRoute, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	route, ok := w.routes[sessionID]
+	return route, ok
 }
 
 func (w *acpWorker) closeSession(key string) {

@@ -363,6 +363,22 @@ func (t *TelegramChannel) SendFile(target, typ, content string) error {
 		}
 		_, err := t.bot.SendVideo(&v)
 		return err
+	case "audio":
+		a := telegram.AudioRequest{
+			ChatID:  chatID,
+			Audio:   params.URL,
+			Caption: params.Caption,
+		}
+		_, err := t.bot.SendAudio(&a)
+		return err
+	case "file":
+		d := telegram.DocumentRequest{
+			ChatID:   chatID,
+			Document: params.URL,
+			Caption:  params.Caption,
+		}
+		_, err := t.bot.SendDocument(&d)
+		return err
 	default:
 		return fmt.Errorf("unsupported type: %s", typ)
 	}
