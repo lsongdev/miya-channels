@@ -7,6 +7,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/lsongdev/telegram-go/telegram"
@@ -14,6 +15,7 @@ import (
 )
 
 const telegramTextLimit = 3900
+const telegramStartupAttempts = 3
 
 type telegramConfig struct {
 	telegram.Config
@@ -31,11 +33,11 @@ func NewTelegramChannelFactory() ChannelFactory {
 			return nil, err
 		}
 		bot := telegram.NewBot(&cfg.Config)
-		me, err := bot.GetMe()
+		me, err := telegramGetMeWithRetry(bot)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("telegram getMe: %w", err)
 		}
-		log.Printf("Telegram: %s(@%s)", me.FirstName, me.UserName)
+		log.Printf("[INFO] Telegram connected: %s(@%s)", me.FirstName, me.UserName)
 		channel := &TelegramChannel{
 			bot: bot,
 		}
@@ -48,6 +50,7 @@ func (t *TelegramChannel) Receive(ctx context.Context) (chan IncomingMessage, er
 	// Start polling
 	go t.bot.StartPolling(ctx, func(update *telegram.Update, err error) {
 		if err != nil {
+			log.Printf("[WARN] Telegram polling error: %v", err)
 			return
 		}
 		if update.Message == nil {
@@ -62,6 +65,23 @@ func (t *TelegramChannel) Receive(ctx context.Context) (chan IncomingMessage, er
 		}
 	})
 	return incoming, nil
+}
+
+func telegramGetMeWithRetry(bot *telegram.TelegramBot) (*telegram.User, error) {
+	var lastErr error
+	for attempt := 1; attempt <= telegramStartupAttempts; attempt++ {
+		me, err := bot.GetMe()
+		if err == nil {
+			return me, nil
+		}
+		lastErr = err
+		if attempt < telegramStartupAttempts {
+			backoff := time.Duration(attempt) * time.Second
+			log.Printf("[WARN] Telegram getMe failed (attempt %d/%d): %v; retrying in %s", attempt, telegramStartupAttempts, err, backoff)
+			time.Sleep(backoff)
+		}
+	}
+	return nil, lastErr
 }
 
 func (t *TelegramChannel) CreateReplyWriter(target string) Writer {
