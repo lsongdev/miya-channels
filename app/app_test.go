@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/base64"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -70,5 +71,29 @@ func TestFileDeliveryInlineDataWritesTempFile(t *testing.T) {
 	}
 	if string(data) != "pdf" {
 		t.Fatalf("temp attachment = %q", data)
+	}
+}
+
+func TestSessionStoreRoundTrip(t *testing.T) {
+	store := &sessionStore{path: filepath.Join(t.TempDir(), "channels", "sessions.json")}
+	input := map[string]*acpSession{
+		"wechat:user-1": {sessionID: acp.SessionID("sess-1"), cwd: "/tmp/work", loaded: true},
+	}
+	if err := store.Save(input); err != nil {
+		t.Fatalf("save sessions: %v", err)
+	}
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("load sessions: %v", err)
+	}
+	sess := loaded["wechat:user-1"]
+	if sess == nil {
+		t.Fatal("missing loaded session")
+	}
+	if sess.sessionID != "sess-1" || sess.cwd != "/tmp/work" {
+		t.Fatalf("loaded session = %#v", sess)
+	}
+	if sess.loaded {
+		t.Fatal("persisted sessions must start unloaded so the worker can LoadSession")
 	}
 }

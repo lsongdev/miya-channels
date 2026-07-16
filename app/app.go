@@ -29,16 +29,30 @@ type Options struct {
 
 type acpSession struct {
 	sessionID acp.SessionID
+	cwd       string
+	loaded    bool
+}
+
+type sessionRecord struct {
+	SessionID string `json:"sessionId"`
+	Cwd       string `json:"cwd,omitempty"`
+	UpdatedAt string `json:"updatedAt,omitempty"`
+}
+
+type sessionStore struct {
+	path string
 }
 
 type acpWorker struct {
-	client   *acp.Client
-	cm       *channels.ChannelManager
-	sessions map[string]*acpSession
-	writers  map[acp.SessionID]channels.Writer
-	routes   map[acp.SessionID]replyRoute
-	mu       sync.Mutex
-	requests chan *promptRequest
+	client      *acp.Client
+	cm          *channels.ChannelManager
+	sessions    map[string]*acpSession
+	store       *sessionStore
+	loadSession bool
+	writers     map[acp.SessionID]channels.Writer
+	routes      map[acp.SessionID]replyRoute
+	mu          sync.Mutex
+	requests    chan *promptRequest
 }
 
 type replyRoute struct {
@@ -48,6 +62,60 @@ type replyRoute struct {
 
 type promptRequest struct {
 	msg channels.IncomingMessage
+}
+
+func newSessionStore() *sessionStore {
+	return &sessionStore{path: filepath.Join(config.ConfigPath, "channels", "sessions.json")}
+}
+
+func (s *sessionStore) Load() (map[string]*acpSession, error) {
+	out := make(map[string]*acpSession)
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return out, nil
+		}
+		return nil, err
+	}
+	var records map[string]sessionRecord
+	if err := json.Unmarshal(data, &records); err != nil {
+		return nil, err
+	}
+	for key, record := range records {
+		if key == "" || record.SessionID == "" {
+			continue
+		}
+		out[key] = &acpSession{
+			sessionID: acp.SessionID(record.SessionID),
+			cwd:       record.Cwd,
+			loaded:    false,
+		}
+	}
+	return out, nil
+}
+
+func (s *sessionStore) Save(sessions map[string]*acpSession) error {
+	records := make(map[string]sessionRecord, len(sessions))
+	now := time.Now().Format(time.RFC3339)
+	for key, sess := range sessions {
+		if key == "" || sess == nil || sess.sessionID == "" {
+			continue
+		}
+		records[key] = sessionRecord{
+			SessionID: string(sess.sessionID),
+			Cwd:       sess.cwd,
+			UpdatedAt: now,
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(records, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return os.WriteFile(s.path, data, 0600)
 }
 
 func Run(ctx context.Context, opts Options) error {
@@ -105,13 +173,24 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("start channels: %w", err)
 	}
 
+	store := newSessionStore()
+	sessions, err := store.Load()
+	if err != nil {
+		log.Printf("[channels] failed to load session mappings: %v", err)
+		sessions = make(map[string]*acpSession)
+	} else if len(sessions) > 0 {
+		log.Printf("[channels] loaded %d session mappings", len(sessions))
+	}
+
 	worker := &acpWorker{
-		client:   client,
-		cm:       cm,
-		sessions: make(map[string]*acpSession),
-		writers:  make(map[acp.SessionID]channels.Writer),
-		routes:   make(map[acp.SessionID]replyRoute),
-		requests: make(chan *promptRequest, 32),
+		client:      client,
+		cm:          cm,
+		sessions:    sessions,
+		store:       store,
+		loadSession: initResp.AgentCapabilities.LoadSession,
+		writers:     make(map[acp.SessionID]channels.Writer),
+		routes:      make(map[acp.SessionID]replyRoute),
+		requests:    make(chan *promptRequest, 32),
 	}
 	client.OnNotification(worker.handleNotification)
 
@@ -123,10 +202,7 @@ func Run(ctx context.Context, opts Options) error {
 		select {
 		case <-ctx.Done():
 			log.Println("Shutting down channels...")
-			for key, s := range worker.sessions {
-				_, _ = client.CloseSession(&acp.CloseSessionRequest{SessionID: s.sessionID})
-				log.Printf("Closed session %s: %s", key, s.sessionID)
-			}
+			worker.persistSessions()
 			time.Sleep(500 * time.Millisecond)
 			return nil
 
@@ -434,6 +510,21 @@ func (w *acpWorker) routeFor(sessionID acp.SessionID) (replyRoute, bool) {
 	return route, ok
 }
 
+func (w *acpWorker) persistSessionsLocked() {
+	if w.store == nil {
+		return
+	}
+	if err := w.store.Save(w.sessions); err != nil {
+		log.Printf("[channels] failed to persist session mappings: %v", err)
+	}
+}
+
+func (w *acpWorker) persistSessions() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.persistSessionsLocked()
+}
+
 func (w *acpWorker) closeSession(key string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -441,6 +532,7 @@ func (w *acpWorker) closeSession(key string) {
 		_, _ = w.client.CloseSession(&acp.CloseSessionRequest{SessionID: s.sessionID})
 		log.Printf("[DEBUG] Closed session %s for %s", s.sessionID, key)
 		delete(w.sessions, key)
+		w.persistSessionsLocked()
 	} else {
 		log.Printf("[DEBUG] No session to close for %s", key)
 	}
@@ -449,7 +541,11 @@ func (w *acpWorker) closeSession(key string) {
 func (w *acpWorker) createSession(key, channel, who string) (*acpSession, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	cwd, _ := os.Getwd()
+	return w.createSessionLocked(key)
+}
+
+func (w *acpWorker) createSessionLocked(key string) (*acpSession, error) {
+	cwd := defaultSessionCwd()
 	log.Printf("[DEBUG] Creating new session for %s", key)
 	sessResp, err := w.client.NewSession(&acp.NewSessionRequest{
 		Cwd:        cwd,
@@ -458,8 +554,9 @@ func (w *acpWorker) createSession(key, channel, who string) (*acpSession, error)
 	if err != nil {
 		return nil, err
 	}
-	s := &acpSession{sessionID: sessResp.SessionID}
+	s := &acpSession{sessionID: sessResp.SessionID, cwd: cwd, loaded: true}
 	w.sessions[key] = s
+	w.persistSessionsLocked()
 	log.Printf("[DEBUG] New session %s for %s", s.sessionID, key)
 	return s, nil
 }
@@ -470,22 +567,47 @@ func (w *acpWorker) getOrCreateSession(channel, who string) (*acpSession, error)
 	defer w.mu.Unlock()
 
 	if s, ok := w.sessions[key]; ok {
+		if !s.loaded {
+			if !w.loadSession {
+				log.Printf("[DEBUG] Dropping persisted session %s for %s because agent does not support loadSession", s.sessionID, key)
+				delete(w.sessions, key)
+				w.persistSessionsLocked()
+				return w.createSessionLocked(key)
+			}
+			cwd := s.cwd
+			if cwd == "" {
+				cwd = defaultSessionCwd()
+			}
+			log.Printf("[DEBUG] Loading persisted session %s for %s", s.sessionID, key)
+			if _, err := w.client.LoadSession(&acp.LoadSessionRequest{
+				SessionID:  s.sessionID,
+				Cwd:        cwd,
+				McpServers: []acp.McpServer{},
+			}); err != nil {
+				log.Printf("[DEBUG] Failed to load persisted session %s for %s: %v", s.sessionID, key, err)
+				delete(w.sessions, key)
+				w.persistSessionsLocked()
+				return w.createSessionLocked(key)
+			}
+			s.cwd = cwd
+			s.loaded = true
+			w.persistSessionsLocked()
+		}
 		log.Printf("[DEBUG] Reusing session %s for %s", s.sessionID, key)
 		return s, nil
 	}
 
-	cwd, _ := os.Getwd()
-	log.Printf("[DEBUG] Creating new session for %s", key)
-	sessResp, err := w.client.NewSession(&acp.NewSessionRequest{
-		Cwd:        cwd,
-		McpServers: []acp.McpServer{},
-	})
-	if err != nil {
-		return nil, err
-	}
+	return w.createSessionLocked(key)
+}
 
-	s := &acpSession{sessionID: sessResp.SessionID}
-	w.sessions[key] = s
-	log.Printf("[DEBUG] New session %s for %s", s.sessionID, key)
-	return s, nil
+func defaultSessionCwd() string {
+	workspace := filepath.Join(config.ConfigPath, "workspace")
+	if err := os.MkdirAll(workspace, 0755); err == nil {
+		return workspace
+	}
+	cwd, err := os.Getwd()
+	if err == nil && cwd != "" {
+		return cwd
+	}
+	return "."
 }
