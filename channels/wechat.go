@@ -4,8 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/lsongdev/miya-channels/config"
@@ -211,12 +216,74 @@ func (w *WeChatChannel) SendFile(target, typ, content string) error {
 		Type    string `json:"type"`
 		URL     string `json:"url"`
 		Caption string `json:"caption,omitempty"`
+		Name    string `json:"name,omitempty"`
+		Mime    string `json:"mime,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(content), &params); err != nil {
 		return err
 	}
 
-	// WeChat iLink bot doesn't have direct file upload API exposed
-	// This would require additional implementation based on the CDN upload flow
-	return fmt.Errorf("file upload not implemented for WeChat channel")
+	replyMessage := w.replyMap[target]
+	if replyMessage == nil {
+		return fmt.Errorf("wechat reply target not found: %s", target)
+	}
+
+	fileName, data, err := loadWechatAttachment(params.URL, params.Name)
+	if err != nil {
+		return err
+	}
+	switch typ {
+	case "image":
+		_, err = replyMessage.ReplyImage(fileName, data)
+	case "video":
+		_, err = replyMessage.ReplyVideo(fileName, data, nil)
+	case "audio", "file":
+		_, err = replyMessage.ReplyFile(fileName, data)
+	default:
+		err = fmt.Errorf("unsupported type: %s", typ)
+	}
+	return err
+}
+
+func loadWechatAttachment(rawURL, name string) (string, []byte, error) {
+	if rawURL == "" {
+		return "", nil, fmt.Errorf("attachment url missing")
+	}
+	fileName := attachmentName(rawURL, name)
+	if path, ok := strings.CutPrefix(rawURL, "file://"); ok {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", nil, err
+		}
+		return fileName, data, nil
+	}
+	if strings.HasPrefix(rawURL, "http://") || strings.HasPrefix(rawURL, "https://") {
+		resp, err := http.Get(rawURL)
+		if err != nil {
+			return "", nil, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			return "", nil, fmt.Errorf("download attachment: HTTP %d", resp.StatusCode)
+		}
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", nil, err
+		}
+		return fileName, data, nil
+	}
+	return "", nil, fmt.Errorf("unsupported attachment url: %s", rawURL)
+}
+
+func attachmentName(rawURL, name string) string {
+	if name != "" {
+		return filepath.Base(name)
+	}
+	if path, ok := strings.CutPrefix(rawURL, "file://"); ok {
+		return filepath.Base(path)
+	}
+	if u, err := url.Parse(rawURL); err == nil && u.Path != "" {
+		return filepath.Base(u.Path)
+	}
+	return "attachment"
 }

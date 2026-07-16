@@ -3,6 +3,7 @@ package channels
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/lsongdev/wecom-go/wecom"
 )
@@ -68,5 +69,5 @@ func (w *WeComChannel) Receive(ctx context.Context) (incoming chan IncomingMessa
 
 // SendFile implements [Channel].
 func (w *WeComChannel) SendFile(target string, typ string, content string) error {
-	panic("unimplemented")
+	return fmt.Errorf("file upload not implemented for WeCom channel")
 }
