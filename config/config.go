@@ -1,9 +1,7 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	agentsconfig "github.com/lsongdev/miya-agents/config"
@@ -12,37 +10,12 @@ import (
 type Config = agentsconfig.Config
 type AgentConfig = agentsconfig.ACPAgentConfig
 
-var ConfigPath = defaultConfigPath()
-var ConfigFile = filepath.Join(ConfigPath, "config.json")
+var ConfigPath = agentsconfig.ConfigPath
+var ConfigFile = agentsconfig.ConfigFile
 var ChannelsLockFile = filepath.Join(ConfigPath, "miya-channels.lock")
 
-func defaultConfigPath() string {
-	home, err := os.UserHomeDir()
-	if err == nil && home != "" {
-		return filepath.Join(home, ".miya")
-	}
-	if home = os.Getenv("HOME"); home != "" {
-		return filepath.Join(home, ".miya")
-	}
-	if home = os.Getenv("USERPROFILE"); home != "" {
-		return filepath.Join(home, ".miya")
-	}
-	return filepath.Join(".miya")
-}
-
 func LoadConfig() (cfg *Config, err error) {
-	if _, err := os.Stat(ConfigFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("config file not found: %s", ConfigFile)
-	}
-	f, err := os.Open(ConfigFile)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	if err = json.NewDecoder(f).Decode(&cfg); err != nil {
-		return
-	}
-	return
+	return agentsconfig.LoadConfigFromFile(ConfigFile)
 }
 
 func DefaultAgent(c *Config) (*AgentConfig, error) {
@@ -62,9 +35,5 @@ func DefaultAgent(c *Config) (*AgentConfig, error) {
 }
 
 func Save(c *Config) error {
-	data, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(ConfigFile, data, 0644)
+	return agentsconfig.SaveConfigToFile(ConfigFile, c)
 }
