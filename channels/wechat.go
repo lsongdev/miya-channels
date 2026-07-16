@@ -152,9 +152,13 @@ func (w *WeChatChannel) SaveConfig() error {
 	if c.Channels == nil {
 		c.Channels = map[string]any{}
 	}
-	d, _ := json.Marshal(w.cfg)
-	c.Channels["wechat"] = d
-	return c.Save()
+	c.Channels["wechat"] = map[string]any{
+		"base_url":     w.cfg.BaseURL,
+		"cdn_base_url": w.cfg.CDNBaseURL,
+		"token":        w.cfg.Token,
+		"updates_buf":  w.cfg.UpdatesBuf,
+	}
+	return config.Save(c)
 }
 
 func (w *WeChatChannel) Receive(ctx context.Context) (chan IncomingMessage, error) {
