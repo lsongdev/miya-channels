@@ -14,6 +14,7 @@ type AgentConfig = agentsconfig.ACPAgentConfig
 
 var ConfigPath = filepath.Join(os.Getenv("HOME"), ".miya")
 var ConfigFile = filepath.Join(ConfigPath, "config.json")
+var ChannelsLockFile = filepath.Join(ConfigPath, "miya-channels.lock")
 
 func LoadConfig() (cfg *Config, err error) {
 	if _, err := os.Stat(ConfigFile); os.IsNotExist(err) {

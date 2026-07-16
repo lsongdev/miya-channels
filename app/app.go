@@ -51,6 +51,12 @@ func Run(ctx context.Context, opts Options) error {
 		}
 	}
 
+	lock, err := acquireProcessLock(config.ChannelsLockFile)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+
 	cm := channels.NewChannelManagerWithOptions(cfg, channels.ChannelOptions{
 		Emit: opts.OnEvent,
 	})
