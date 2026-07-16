@@ -527,24 +527,24 @@ func (w *acpWorker) persistSessions() {
 
 func (w *acpWorker) closeSession(key string) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	if s, ok := w.sessions[key]; ok {
-		_, _ = w.client.CloseSession(&acp.CloseSessionRequest{SessionID: s.sessionID})
-		log.Printf("[DEBUG] Closed session %s for %s", s.sessionID, key)
+	s, ok := w.sessions[key]
+	if ok {
 		delete(w.sessions, key)
 		w.persistSessionsLocked()
-	} else {
-		log.Printf("[DEBUG] No session to close for %s", key)
 	}
+	w.mu.Unlock()
+
+	if !ok {
+		log.Printf("[DEBUG] No session to close for %s", key)
+		return
+	}
+	if _, err := w.client.CloseSession(&acp.CloseSessionRequest{SessionID: s.sessionID}); err != nil {
+		log.Printf("[WARN] Failed to close session %s for %s: %v", s.sessionID, key, err)
+	}
+	log.Printf("[DEBUG] Closed session %s for %s", s.sessionID, key)
 }
 
 func (w *acpWorker) createSession(key, channel, who string) (*acpSession, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.createSessionLocked(key)
-}
-
-func (w *acpWorker) createSessionLocked(key string) (*acpSession, error) {
 	cwd := defaultSessionCwd()
 	log.Printf("[DEBUG] Creating new session for %s", key)
 	sessResp, err := w.client.NewSession(&acp.NewSessionRequest{
@@ -555,8 +555,12 @@ func (w *acpWorker) createSessionLocked(key string) (*acpSession, error) {
 		return nil, err
 	}
 	s := &acpSession{sessionID: sessResp.SessionID, cwd: cwd, loaded: true}
+
+	w.mu.Lock()
 	w.sessions[key] = s
 	w.persistSessionsLocked()
+	w.mu.Unlock()
+
 	log.Printf("[DEBUG] New session %s for %s", s.sessionID, key)
 	return s, nil
 }
@@ -564,40 +568,51 @@ func (w *acpWorker) createSessionLocked(key string) (*acpSession, error) {
 func (w *acpWorker) getOrCreateSession(channel, who string) (*acpSession, error) {
 	key := channel + ":" + who
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	s, ok := w.sessions[key]
+	w.mu.Unlock()
 
-	if s, ok := w.sessions[key]; ok {
-		if !s.loaded {
-			if !w.loadSession {
-				log.Printf("[DEBUG] Dropping persisted session %s for %s because agent does not support loadSession", s.sessionID, key)
-				delete(w.sessions, key)
-				w.persistSessionsLocked()
-				return w.createSessionLocked(key)
-			}
-			cwd := s.cwd
-			if cwd == "" {
-				cwd = defaultSessionCwd()
-			}
-			log.Printf("[DEBUG] Loading persisted session %s for %s", s.sessionID, key)
-			if _, err := w.client.LoadSession(&acp.LoadSessionRequest{
-				SessionID:  s.sessionID,
-				Cwd:        cwd,
-				McpServers: []acp.McpServer{},
-			}); err != nil {
-				log.Printf("[DEBUG] Failed to load persisted session %s for %s: %v", s.sessionID, key, err)
-				delete(w.sessions, key)
-				w.persistSessionsLocked()
-				return w.createSessionLocked(key)
-			}
-			s.cwd = cwd
-			s.loaded = true
-			w.persistSessionsLocked()
-		}
-		log.Printf("[DEBUG] Reusing session %s for %s", s.sessionID, key)
-		return s, nil
+	if !ok {
+		return w.createSession(key, channel, who)
 	}
 
-	return w.createSessionLocked(key)
+	if !s.loaded {
+		if !w.loadSession {
+			log.Printf("[DEBUG] Dropping persisted session %s for %s because agent does not support loadSession", s.sessionID, key)
+			w.mu.Lock()
+			delete(w.sessions, key)
+			w.persistSessionsLocked()
+			w.mu.Unlock()
+			return w.createSession(key, channel, who)
+		}
+		cwd := s.cwd
+		if cwd == "" {
+			cwd = defaultSessionCwd()
+		}
+		log.Printf("[DEBUG] Loading persisted session %s for %s", s.sessionID, key)
+		if _, err := w.client.LoadSession(&acp.LoadSessionRequest{
+			SessionID:  s.sessionID,
+			Cwd:        cwd,
+			McpServers: []acp.McpServer{},
+		}); err != nil {
+			log.Printf("[DEBUG] Failed to load persisted session %s for %s: %v", s.sessionID, key, err)
+			w.mu.Lock()
+			delete(w.sessions, key)
+			w.persistSessionsLocked()
+			w.mu.Unlock()
+			return w.createSession(key, channel, who)
+		}
+		w.mu.Lock()
+		if current, ok := w.sessions[key]; ok && current.sessionID == s.sessionID {
+			current.cwd = cwd
+			current.loaded = true
+			s = current
+			w.persistSessionsLocked()
+		}
+		w.mu.Unlock()
+	}
+
+	log.Printf("[DEBUG] Reusing session %s for %s", s.sessionID, key)
+	return s, nil
 }
 
 func defaultSessionCwd() string {
