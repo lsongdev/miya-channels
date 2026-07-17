@@ -194,7 +194,7 @@ func Run(ctx context.Context, opts Options) error {
 		routes:      make(map[acp.SessionID]replyRoute),
 		requests:    make(chan *promptRequest, 32),
 	}
-	client.OnNotification(worker.handleNotification)
+	client.OnNotification(acp.NewNotificationHandler(&channelNotificationReceiver{worker: worker}))
 
 	go worker.run(ctx)
 
@@ -341,44 +341,32 @@ func (w *acpWorker) prompt(sessionID acp.SessionID, content string) error {
 	}
 }
 
-func (w *acpWorker) handleNotification(method string, params json.RawMessage) {
-	if method != "session/update" {
-		log.Println("[DEBUG] Ignoring notification", method, "params:", string(params))
-		return
-	}
-	var raw struct {
-		SessionID acp.SessionID   `json:"sessionId"`
-		Update    json.RawMessage `json:"update"`
-	}
-	if err := json.Unmarshal(params, &raw); err != nil {
-		log.Printf("[WARN] Failed to parse session/update envelope: %v", err)
-		return
-	}
-	var update struct {
-		SessionUpdate string          `json:"sessionUpdate"`
-		Content       json.RawMessage `json:"content,omitempty"`
-	}
-	if err := json.Unmarshal(raw.Update, &update); err != nil {
-		log.Printf("[WARN] Failed to parse session/update payload for %s: %v", raw.SessionID, err)
-		return
-	}
-	log.Printf("[DEBUG] Session update received: session=%s type=%s", raw.SessionID, update.SessionUpdate)
-	if update.SessionUpdate != "agent_message_chunk" {
-		return
-	}
-	var content acp.ContentBlock
-	if err := json.Unmarshal(update.Content, &content); err != nil {
-		log.Printf("[WARN] Failed to parse agent message content for %s: %v", raw.SessionID, err)
-		return
-	}
+type channelNotificationReceiver struct {
+	acp.DefaultNotificationReceiver
+	worker *acpWorker
+}
+
+func (r *channelNotificationReceiver) SessionUpdate(notification *acp.SessionNotification) {
+	log.Printf("[DEBUG] Session update received: session=%s type=%s", notification.SessionID, notification.Update.SessionUpdate)
+}
+
+func (r *channelNotificationReceiver) AgentMessageChunk(sessionID acp.SessionID, content acp.ContentBlock, messageID *acp.MessageID) {
 	switch content.Type {
 	case "text":
-		w.handleTextContent(raw.SessionID, content.Text)
+		r.worker.handleTextContent(sessionID, content.Text)
 	case "image", "audio", "resource", "resource_link":
-		w.handleFileContent(raw.SessionID, content)
+		r.worker.handleFileContent(sessionID, content)
 	default:
-		log.Printf("[DEBUG] Ignoring agent message content type=%s session=%s", content.Type, raw.SessionID)
+		log.Printf("[DEBUG] Ignoring agent message content type=%s session=%s", content.Type, sessionID)
 	}
+}
+
+func (r *channelNotificationReceiver) UnknownNotification(method string, params json.RawMessage) {
+	log.Println("[DEBUG] Ignoring notification", method, "params:", string(params))
+}
+
+func (r *channelNotificationReceiver) InvalidNotification(method string, params json.RawMessage, err error) {
+	log.Printf("[WARN] Failed to parse notification %s: %v", method, err)
 }
 
 func (w *acpWorker) handleTextContent(sessionID acp.SessionID, text string) {
