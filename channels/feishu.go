@@ -34,8 +34,8 @@ func NewFeishuChannelFactory() ChannelFactory {
 	}
 }
 
-func (f *FeishuChannel) Receive(ctx context.Context) (incoming chan IncomingMessage, err error) {
-	incoming = make(chan IncomingMessage, 100)
+func (f *FeishuChannel) Receive(ctx context.Context) (incoming chan IncomingEvent, err error) {
+	incoming = make(chan IncomingEvent, 100)
 	// Start listening for messages
 	f.client.Start(ctx)
 	go func() {
@@ -52,11 +52,18 @@ func (f *FeishuChannel) Receive(ctx context.Context) (incoming chan IncomingMess
 						content = contentMap["text"]
 					}
 				}
-				incoming <- IncomingMessage{
-					From:    "feishu",
-					Who:     msgReceive.Sender.SenderID.UserID,
-					ReplyTo: msgReceive.Message.MessageID,
-					Content: content,
+				senderID := msgReceive.Sender.SenderID.UserID
+				if senderID == "" {
+					senderID = msgReceive.Sender.SenderID.OpenID
+				}
+				raw, _ := json.Marshal(msgReceive)
+				incoming <- IncomingEvent{
+					ConversationID: msgReceive.Message.ChatID,
+					SenderID:       senderID,
+					MessageID:      msgReceive.Message.MessageID,
+					ReplyTo:        msgReceive.Message.MessageID,
+					Text:           content,
+					Raw:            raw,
 				}
 			}
 		}

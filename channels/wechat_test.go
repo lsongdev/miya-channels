@@ -31,7 +31,7 @@ func TestWechatAttachmentNameFromHTTPURL(t *testing.T) {
 	}
 }
 
-func TestWechatSaveConfigWritesObject(t *testing.T) {
+func TestWechatSaveConfigUpdatesInstance(t *testing.T) {
 	oldPath := config.ConfigPath
 	oldFile := config.ConfigFile
 	temp := t.TempDir()
@@ -41,8 +41,13 @@ func TestWechatSaveConfigWritesObject(t *testing.T) {
 		config.ConfigPath = oldPath
 		config.ConfigFile = oldFile
 	})
+	initial := `{"channels":[{"id":"wx-personal","type":"wechat","config":{"token":"old"}}]}`
+	if err := os.WriteFile(config.ConfigFile, []byte(initial), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
 
 	channel := &WeChatChannel{
+		instanceID: "wx-personal",
 		cfg: &wechatbot.Config{
 			BaseURL:    "https://example.com/base",
 			CDNBaseURL: "https://example.com/cdn",
@@ -58,14 +63,17 @@ func TestWechatSaveConfigWritesObject(t *testing.T) {
 		t.Fatalf("read config: %v", err)
 	}
 	var raw struct {
-		Channels map[string]any `json:"channels"`
+		Channels []config.ChannelInstance `json:"channels"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatalf("unmarshal saved config: %v", err)
 	}
-	wechat, ok := raw.Channels["wechat"].(map[string]any)
-	if !ok {
-		t.Fatalf("wechat config = %#v", raw.Channels["wechat"])
+	if len(raw.Channels) != 1 {
+		t.Fatalf("channels = %#v", raw.Channels)
+	}
+	var wechat map[string]any
+	if err := json.Unmarshal(raw.Channels[0].Config, &wechat); err != nil {
+		t.Fatalf("wechat config: %v", err)
 	}
 	if wechat["token"] != "wechat-token" || wechat["updates_buf"] != "cursor" {
 		t.Fatalf("wechat config = %#v", wechat)

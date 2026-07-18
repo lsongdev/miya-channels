@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
+	"time"
 
 	"github.com/lsongdev/miya-channels/config"
 )
@@ -14,20 +16,49 @@ type Writer interface {
 }
 
 type Channel interface {
-	Receive(context.Context) (chan IncomingMessage, error)
+	Receive(context.Context) (chan IncomingEvent, error)
 	CreateReplyWriter(target string) Writer
 	SendFile(target, typ, content string) error
 }
 
-type IncomingMessage struct {
-	From    string // channel name
-	Who     string // user ID
-	ReplyTo string
-	Content string
+type Attachment struct {
+	Type     string `json:"type"`
+	Name     string `json:"name,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
+	URL      string `json:"url,omitempty"`
+	Data     []byte `json:"data,omitempty"`
+	Size     int64  `json:"size,omitempty"`
+}
+
+type IncomingEvent struct {
+	ChannelID      string          `json:"channelId"`
+	ChannelType    string          `json:"channelType"`
+	ConversationID string          `json:"conversationId"`
+	SenderID       string          `json:"senderId"`
+	MessageID      string          `json:"messageId,omitempty"`
+	ReplyTo        string          `json:"replyTo,omitempty"`
+	Text           string          `json:"text,omitempty"`
+	Attachments    []Attachment    `json:"attachments,omitempty"`
+	Raw            json.RawMessage `json:"raw,omitempty"`
+	ReceivedAt     time.Time       `json:"receivedAt"`
+}
+
+func (e IncomingEvent) SourceKey() string {
+	return fmt.Sprintf("%s:conversation:%s:sender:%s", e.ChannelID, e.ConversationID, e.SenderID)
+}
+
+type DeliveryItem struct {
+	Kind      string      `json:"kind"`
+	Text      string      `json:"text,omitempty"`
+	File      *Attachment `json:"file,omitempty"`
+	Format    string      `json:"format,omitempty"`
+	Final     bool        `json:"final,omitempty"`
+	Sensitive bool        `json:"sensitive,omitempty"`
 }
 
 type ChannelEvent struct {
-	Channel     string `json:"channel"`
+	Channel     string `json:"channel"` // channel instance ID
+	ChannelType string `json:"channelType,omitempty"`
 	Type        string `json:"type"`
 	Status      string `json:"status,omitempty"`
 	QRCode      string `json:"qrcode,omitempty"`
@@ -37,7 +68,8 @@ type ChannelEvent struct {
 }
 
 type ChannelOptions struct {
-	Emit func(ChannelEvent)
+	Instance config.ChannelInstance
+	Emit     func(ChannelEvent)
 }
 
 func (opts ChannelOptions) emit(event ChannelEvent) {
@@ -49,10 +81,10 @@ func (opts ChannelOptions) emit(event ChannelEvent) {
 type ChannelFactory func(config json.RawMessage, opts ChannelOptions) (Channel, error)
 
 type ChannelManager struct {
-	config   *config.Config
-	channels map[string]Channel
-	Incoming chan IncomingMessage
-	options  ChannelOptions
+	channels  map[string]Channel
+	instances map[string]config.ChannelInstance
+	Incoming  chan IncomingEvent
+	options   ChannelOptions
 }
 
 var factories map[string]ChannelFactory
@@ -67,51 +99,59 @@ func init() {
 	}
 }
 
-func NewChannelManager(cfg *config.Config) (manager *ChannelManager) {
-	return NewChannelManagerWithOptions(cfg, ChannelOptions{})
-}
-
-func NewChannelManagerWithOptions(cfg *config.Config, opts ChannelOptions) (manager *ChannelManager) {
-	manager = &ChannelManager{
-		channels: make(map[string]Channel),
-		Incoming: make(chan IncomingMessage, 100),
-		options:  opts,
+func NewChannelManager(instances []config.ChannelInstance, opts ChannelOptions) (*ChannelManager, error) {
+	manager := &ChannelManager{
+		channels:  make(map[string]Channel),
+		instances: make(map[string]config.ChannelInstance),
+		Incoming:  make(chan IncomingEvent, 100),
+		options:   opts,
 	}
-	for name, channelConfig := range cfg.Channels {
-		factory, ok := factories[name]
+	for _, instance := range instances {
+		factory, ok := factories[instance.Type]
 		if !ok {
-			log.Printf("Channel factory not found: %s", name)
-			continue
+			return nil, fmt.Errorf("channel factory not found: %s", instance.Type)
 		}
-		rawConfig, err := json.Marshal(channelConfig)
+		instanceOpts := opts
+		instanceOpts.Instance = instance
+		baseEmit := opts.Emit
+		instanceOpts.Emit = func(event ChannelEvent) {
+			event.Channel = instance.ID
+			event.ChannelType = instance.Type
+			if baseEmit != nil {
+				baseEmit(event)
+			}
+		}
+		channel, err := factory(instance.Config, instanceOpts)
 		if err != nil {
-			log.Printf("Error encoding channel %s config: %v", name, err)
-			continue
+			return nil, fmt.Errorf("create channel %s (%s): %w", instance.ID, instance.Type, err)
 		}
-		channel, err := factory(rawConfig, opts)
-		if err != nil {
-			log.Printf("Error creating channel %s: %v", name, err)
-			continue
-		}
-		manager.Register(name, channel)
+		manager.RegisterInstance(instance, channel)
 	}
-	return manager
+	return manager, nil
 }
 
-func (cm *ChannelManager) Register(name string, channel Channel) {
+func (cm *ChannelManager) RegisterInstance(instance config.ChannelInstance, channel Channel) {
+	name := instance.ID
 	cm.channels[name] = channel
+	cm.instances[name] = instance
 	log.Println("channel register", name)
 }
 
 func (cm *ChannelManager) Start(ctx context.Context) (err error) {
 	// Start receiving messages
-	for _, ch := range cm.channels {
+	for id, ch := range cm.channels {
 		incoming, err := ch.Receive(ctx)
 		if err != nil {
 			return err
 		}
+		instance := cm.instances[id]
 		go func() {
 			for msg := range incoming {
+				msg.ChannelID = instance.ID
+				msg.ChannelType = instance.Type
+				if msg.ReceivedAt.IsZero() {
+					msg.ReceivedAt = time.Now()
+				}
 				cm.Incoming <- msg
 			}
 		}()
@@ -129,7 +169,13 @@ func (cm *ChannelManager) ListChannels() []string {
 	for name := range cm.channels {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
+}
+
+func (cm *ChannelManager) Instance(id string) (config.ChannelInstance, bool) {
+	instance, ok := cm.instances[id]
+	return instance, ok
 }
 
 func (cm *ChannelManager) CreateReplyWriter(channelName, target string) (Writer, error) {

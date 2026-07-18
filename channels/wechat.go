@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lsongdev/miya-channels/config"
@@ -18,10 +19,12 @@ import (
 )
 
 type WeChatChannel struct {
-	bot      *wechatbot.WeChatBot
-	cfg      *wechatbot.Config
-	replyMap map[string]*wechatbot.ReplyMessage
-	options  ChannelOptions
+	bot        *wechatbot.WeChatBot
+	cfg        *wechatbot.Config
+	instanceID string
+	replyMap   map[string]*wechatbot.ReplyMessage
+	replyMu    sync.RWMutex
+	options    ChannelOptions
 }
 
 func NewWeChatChannelFactory() ChannelFactory {
@@ -35,10 +38,11 @@ func NewWeChatChannelFactory() ChannelFactory {
 		}
 		bot := wechatbot.NewBot(&cfg)
 		return &WeChatChannel{
-			bot:      bot,
-			cfg:      &cfg,
-			replyMap: make(map[string]*wechatbot.ReplyMessage),
-			options:  opts,
+			bot:        bot,
+			cfg:        &cfg,
+			instanceID: opts.Instance.ID,
+			replyMap:   make(map[string]*wechatbot.ReplyMessage),
+			options:    opts,
 		}, nil
 	}
 }
@@ -145,33 +149,54 @@ func (w *WeChatChannel) login(ctx context.Context, _ bool) error {
 }
 
 func (w *WeChatChannel) SaveConfig() error {
-	c, err := config.LoadConfig()
-	if err != nil || c == nil {
-		c = &config.Config{}
-	}
-	if c.Channels == nil {
-		c.Channels = map[string]any{}
-	}
-	c.Channels["wechat"] = map[string]any{
+	raw, err := json.Marshal(map[string]any{
 		"base_url":     w.cfg.BaseURL,
 		"cdn_base_url": w.cfg.CDNBaseURL,
 		"token":        w.cfg.Token,
 		"updates_buf":  w.cfg.UpdatesBuf,
+	})
+	if err != nil {
+		return err
 	}
-	return config.Save(c)
+	if w.instanceID == "" {
+		return fmt.Errorf("wechat channel instance id is required")
+	}
+	return config.UpdateChannelInstanceConfig(w.instanceID, raw)
 }
 
-func (w *WeChatChannel) Receive(ctx context.Context) (chan IncomingMessage, error) {
-	incoming := make(chan IncomingMessage, 100)
+func (w *WeChatChannel) Receive(ctx context.Context) (chan IncomingEvent, error) {
+	incoming := make(chan IncomingEvent, 100)
 	go func() {
 		defer close(incoming)
 		w.bot.Start(ctx, func(message *wechatbot.Message) {
-			w.replyMap[message.FromUserID] = w.bot.CreateReply(message)
-			incoming <- IncomingMessage{
-				From:    "wechat",
-				Who:     message.FromUserID,
-				ReplyTo: message.FromUserID,
-				Content: message.Text(),
+			replyTo := fmt.Sprintf("%d", message.MessageID)
+			if message.MessageID == 0 {
+				replyTo = message.FromUserID
+			}
+			w.replyMu.Lock()
+			w.replyMap[replyTo] = w.bot.CreateReply(message)
+			w.replyMu.Unlock()
+			attachments, attachmentErr := w.attachments(message)
+			text := message.Text()
+			if attachmentErr != nil {
+				text += fmt.Sprintf("\n[Attachment error: %v]", attachmentErr)
+			}
+			conversationID := message.SessionID
+			if message.GroupID != "" {
+				conversationID = message.GroupID
+			}
+			if conversationID == "" {
+				conversationID = message.FromUserID
+			}
+			raw, _ := json.Marshal(message)
+			incoming <- IncomingEvent{
+				ConversationID: conversationID,
+				SenderID:       message.FromUserID,
+				MessageID:      fmt.Sprintf("%d", message.MessageID),
+				ReplyTo:        replyTo,
+				Text:           text,
+				Attachments:    attachments,
+				Raw:            raw,
 			}
 			w.SaveConfig()
 		})
@@ -179,8 +204,47 @@ func (w *WeChatChannel) Receive(ctx context.Context) (chan IncomingMessage, erro
 	return incoming, nil
 }
 
+func (w *WeChatChannel) attachments(message *wechatbot.Message) ([]Attachment, error) {
+	attachments := make([]Attachment, 0)
+	for _, item := range message.ItemList {
+		var attachment Attachment
+		var media *wechatbot.CDNMedia
+		switch {
+		case item.ImageItem != nil:
+			attachment = Attachment{Type: "image", Name: "image.jpg", MimeType: "image/jpeg", Size: item.ImageItem.MidSize}
+			media = item.ImageItem.Media
+		case item.VoiceItem != nil:
+			attachment = Attachment{Type: "audio", Name: "voice.silk", MimeType: "audio/silk"}
+			media = item.VoiceItem.Media
+		case item.FileItem != nil:
+			attachment = Attachment{Type: "file", Name: item.FileItem.FileName}
+			media = item.FileItem.Media
+		case item.VideoItem != nil:
+			attachment = Attachment{Type: "video", Name: "video.mp4", MimeType: "video/mp4", Size: item.VideoItem.VideoSize}
+			media = item.VideoItem.Media
+		default:
+			continue
+		}
+		if media == nil {
+			continue
+		}
+		data, err := w.bot.DownloadMedia(media)
+		if err != nil {
+			return attachments, err
+		}
+		attachment.Data = data
+		if attachment.Size == 0 {
+			attachment.Size = int64(len(data))
+		}
+		attachments = append(attachments, attachment)
+	}
+	return attachments, nil
+}
+
 func (w *WeChatChannel) CreateReplyWriter(target string) Writer {
+	w.replyMu.RLock()
 	replyMessage := w.replyMap[target]
+	w.replyMu.RUnlock()
 	return &WeChatWriter{
 		userID:       target,
 		replyMessage: replyMessage,
@@ -197,6 +261,9 @@ type WeChatWriter struct {
 }
 
 func (w *WeChatWriter) Write(s string, done bool) error {
+	if w.replyMessage == nil {
+		return fmt.Errorf("wechat reply target not found: %s", w.userID)
+	}
 	w.buffer += s
 
 	if w.first {
@@ -227,7 +294,9 @@ func (w *WeChatChannel) SendFile(target, typ, content string) error {
 		return err
 	}
 
+	w.replyMu.RLock()
 	replyMessage := w.replyMap[target]
+	w.replyMu.RUnlock()
 	if replyMessage == nil {
 		return fmt.Errorf("wechat reply target not found: %s", target)
 	}

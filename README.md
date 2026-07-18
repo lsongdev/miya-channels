@@ -39,25 +39,30 @@ Configuration file: `~/.miya/config.json`
     "command": "miya-agents",
     "args": []
   }],
-  "channels": {
-    "telegram": {
-      "token": "your-bot-token"
-    },
-    "feishu": {
-      "app_id": "cli_xxx",
-      "app_secret": "xxx"
-    },
-    "wechat": {
-      "storage_path": "./storage"
-    },
-    "wecom": {
-      "corp_id": "xxx",
-      "token": "xxx",
-      "encoding_aes_key": "xxx"
+  "channels": [
+    {
+      "id": "tg-personal",
+      "type": "telegram",
+      "agent": "miya",
+      "commands": {
+        "agentSwitch": true,
+        "allowedAgents": ["miya", "research"]
+      },
+      "delivery": {
+        "visibility": "normal",
+        "streaming": true,
+        "editIntervalMs": 800
+      },
+      "config": {
+        "token": "your-bot-token"
+      }
     }
-  }
+  ]
 }
 ```
+
+`channels` must be an array. Each instance has its own stable ID, agent binding,
+credentials, and delivery policy.
 
 ## Building
 
@@ -84,12 +89,20 @@ make docker-run
 
 While chatting with the agent through any channel:
 
-- `/new` — Start a new session
-- `/stop` — Stop the current session
+- `/new` - Start a new session
+- `/reset` - Reserved for in-place session reset; currently directs users to `/new`
+- `/stop` - Cancel the active prompt without deleting the session
+- `/agent` and `/agent <id>` - Inspect or switch agents when enabled for the channel
+- `/mode` and `/mode <id>` - Inspect or switch ACP session modes
+- `/detail <simple|normal|verbose|debug>` - Change the source visibility profile
+- `/help` - Show gateway commands
 
 ## Session Management
 
-miya-channels maintains one ACP session per user per channel. Sessions persist across messages for conversational continuity. Use `/new` to reset and `/stop` to terminate a session.
+miya-channels persists a route binding for each channel instance, conversation,
+and sender. A binding keeps one session per agent, so switching away from an
+agent and back can resume its previous context. Use `/new` to replace the
+current agent session and `/stop` to cancel only the active prompt.
 
 ## License
 

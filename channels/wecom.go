@@ -46,8 +46,8 @@ func (w *WeComChannel) CreateReplyWriter(target string) Writer {
 }
 
 // Receive implements [Channel].
-func (w *WeComChannel) Receive(ctx context.Context) (incoming chan IncomingMessage, err error) {
-	incoming = make(chan IncomingMessage, 10)
+func (w *WeComChannel) Receive(ctx context.Context) (incoming chan IncomingEvent, err error) {
+	incoming = make(chan IncomingEvent, 10)
 	go w.bot.Start(ctx)
 	go func() {
 		defer close(incoming)
@@ -55,11 +55,14 @@ func (w *WeComChannel) Receive(ctx context.Context) (incoming chan IncomingMessa
 			var event wecom.WeComBotEvent
 			json.Unmarshal(msg.Body, &event)
 			if msg.Command == "aibot_msg_callback" {
-				incoming <- IncomingMessage{
-					From:    "wecom",
-					Who:     event.From.UserID,
-					ReplyTo: msg.RequestID(),
-					Content: event.Text.Content,
+				raw, _ := json.Marshal(event)
+				incoming <- IncomingEvent{
+					ConversationID: event.ChatID,
+					SenderID:       event.From.UserID,
+					MessageID:      event.MessageID,
+					ReplyTo:        msg.RequestID(),
+					Text:           event.Text.Content,
+					Raw:            raw,
 				}
 			}
 		}

@@ -1,5 +1,9 @@
 # miya-channels Architecture Plan
 
+The active architecture baseline is [FUTURE_ARCHITECTURE.md](./FUTURE_ARCHITECTURE.md).
+This file is retained for historical context around the original single-agent
+worker and Telegram chunking decisions.
+
 ## Role
 
 `miya-channels` is a standalone chat gateway. It receives messages from external chat platforms and forwards them to an ACP agent. It should remain independently runnable, but it is also intended to become a Channel Connector for `miya-desktop`.

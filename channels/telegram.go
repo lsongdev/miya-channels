@@ -45,8 +45,8 @@ func NewTelegramChannelFactory() ChannelFactory {
 	}
 }
 
-func (t *TelegramChannel) Receive(ctx context.Context) (chan IncomingMessage, error) {
-	incoming := make(chan IncomingMessage, 100)
+func (t *TelegramChannel) Receive(ctx context.Context) (chan IncomingEvent, error) {
+	incoming := make(chan IncomingEvent, 100)
 	// Start polling
 	go t.bot.StartPolling(ctx, func(update *telegram.Update, err error) {
 		if err != nil {
@@ -56,12 +56,27 @@ func (t *TelegramChannel) Receive(ctx context.Context) (chan IncomingMessage, er
 		if update.Message == nil {
 			return
 		}
+		if update.Message.Chat == nil {
+			return
+		}
 
-		incoming <- IncomingMessage{
-			From:    "telegram",
-			Who:     fmt.Sprintf("%d", update.Message.Chat.ID),
-			ReplyTo: fmt.Sprintf("%d", update.Message.Chat.ID),
-			Content: update.Message.Text,
+		conversationID := fmt.Sprintf("%d", update.Message.Chat.ID)
+		senderID := conversationID
+		if update.Message.From != nil {
+			senderID = fmt.Sprintf("%d", update.Message.From.ID)
+		}
+		text := update.Message.Text
+		if text == "" && update.Message.Caption != nil {
+			text = *update.Message.Caption
+		}
+		raw, _ := json.Marshal(update)
+		incoming <- IncomingEvent{
+			ConversationID: conversationID,
+			SenderID:       senderID,
+			MessageID:      fmt.Sprintf("%d", update.Message.MessageID),
+			ReplyTo:        conversationID,
+			Text:           text,
+			Raw:            raw,
 		}
 	})
 	return incoming, nil
