@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	github.com/lsongdev/feishu-go v0.0.0-20260319163837-39674c462916
-	github.com/lsongdev/miya-agents v0.0.0-20260718145414-78f22640aded
+	github.com/lsongdev/miya-agents v0.0.0-20260718145839-699fe3eca91c
 	github.com/lsongdev/telegram-go v0.0.0-20260320025417-8942b286b9e9
 	github.com/lsongdev/wechatbot-go v0.0.0-20260324073854-535a867c66ad
 	github.com/lsongdev/wecom-go v0.0.0-20260319113224-a7efceeaed8a

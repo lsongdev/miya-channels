@@ -23,6 +23,8 @@ github.com/lsongdev/miya-agents v0.0.0-20260718142001-36c98647562b h1:oR+EWA+8RZ
 github.com/lsongdev/miya-agents v0.0.0-20260718142001-36c98647562b/go.mod h1:GE0xgGCUq77L4MpDASyVxeSS6DKM/A20bsoW0ElvGBw=
 github.com/lsongdev/miya-agents v0.0.0-20260718145414-78f22640aded h1:SNjyZ+lIny2yQLxRPD9uijbXJNZ2jCor/4NjrOdF844=
 github.com/lsongdev/miya-agents v0.0.0-20260718145414-78f22640aded/go.mod h1:GE0xgGCUq77L4MpDASyVxeSS6DKM/A20bsoW0ElvGBw=
+github.com/lsongdev/miya-agents v0.0.0-20260718145839-699fe3eca91c h1:TGSr7vGpCEU7BIe3oN54JamwAmu56SkjdocQbBwfBzc=
+github.com/lsongdev/miya-agents v0.0.0-20260718145839-699fe3eca91c/go.mod h1:GE0xgGCUq77L4MpDASyVxeSS6DKM/A20bsoW0ElvGBw=
 github.com/lsongdev/telegram-go v0.0.0-20260320025417-8942b286b9e9 h1:zq0rUkLB0Q2rf3ndw2HngNaupfS+Ev+Vgi5WWgeOIL8=
 github.com/lsongdev/telegram-go v0.0.0-20260320025417-8942b286b9e9/go.mod h1:hzoU65fDr/n158bgVzT8a9SxNao6v9WFbCHkZpRMT9M=
 github.com/lsongdev/wechatbot-go v0.0.0-20260324073854-535a867c66ad h1:92LoyhkbfMW0B+tcvVqjchL/EertaS6jMJlcjsH2LIU=
