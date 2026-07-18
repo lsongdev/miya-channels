@@ -30,7 +30,11 @@ func newAgentRegistry(cfg *config.Config, opts Options) (*agentRegistry, error) 
 	if factory == nil {
 		factory = DefaultEndpointAgentClient
 	}
-	for _, endpoint := range cfg.Agents {
+	endpoints, err := config.AgentEndpoints(cfg)
+	if err != nil {
+		return nil, err
+	}
+	for _, endpoint := range endpoints {
 		if !endpoint.IsEnabled() {
 			continue
 		}

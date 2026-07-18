@@ -14,6 +14,10 @@ import (
 type Config = agentsconfig.Config
 type AgentConfig = agentsconfig.ACPAgentConfig
 
+func AgentEndpoints(cfg *Config) ([]AgentConfig, error) {
+	return agentsconfig.AgentEndpoints(cfg)
+}
+
 type Visibility string
 
 const (
