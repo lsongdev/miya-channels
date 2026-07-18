@@ -298,7 +298,7 @@ func (g *Gateway) getOrCreateSession(source string, binding *routeBinding, runti
 
 func (g *Gateway) createSession(source string, binding *routeBinding, runtime *agentRuntime) (*sessionState, error) {
 	cwd := defaultSessionCwd()
-	resp, err := runtime.client.NewSession(&acp.NewSessionRequest{Cwd: cwd, McpServers: []acp.McpServer{}})
+	resp, err := runtime.client.NewSession(newSessionRequest(runtime, cwd))
 	if err != nil {
 		return nil, err
 	}
@@ -313,6 +313,14 @@ func (g *Gateway) createSession(source string, binding *routeBinding, runtime *a
 	g.persistLocked()
 	g.mu.Unlock()
 	return session, nil
+}
+
+func newSessionRequest(runtime *agentRuntime, cwd string) *acp.NewSessionRequest {
+	req := &acp.NewSessionRequest{Cwd: cwd, McpServers: []acp.McpServer{}}
+	if runtime != nil && runtime.profile != "" {
+		req.Meta = acp.Meta{acp.MiyaProfileMetaKey: runtime.profile}
+	}
+	return req
 }
 
 func (g *Gateway) deleteSession(source, agentID string) *sessionState {

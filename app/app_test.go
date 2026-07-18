@@ -71,6 +71,16 @@ func TestAgentCommandSwitchesBindingAndKeepsAgentSessions(t *testing.T) {
 	}
 }
 
+func TestNewSessionRequestIncludesAgentProfile(t *testing.T) {
+	req := newSessionRequest(&agentRuntime{id: "miya-coding", profile: "coding"}, "/tmp/workspace")
+	if got := req.Meta[acp.MiyaProfileMetaKey]; got != "coding" {
+		t.Fatalf("profile metadata = %v, want coding", got)
+	}
+	if req.Cwd != "/tmp/workspace" {
+		t.Fatalf("cwd = %q", req.Cwd)
+	}
+}
+
 func TestFileDeliveryVideoResource(t *testing.T) {
 	uri := "file:///tmp/camera.mp4"
 	payload, ok, err := fileDelivery(acp.ContentBlock{

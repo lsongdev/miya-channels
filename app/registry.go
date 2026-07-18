@@ -12,6 +12,7 @@ import (
 
 type agentRuntime struct {
 	id          string
+	profile     string
 	client      *acp.Client
 	loadSession bool
 }
@@ -42,7 +43,7 @@ func newAgentRegistry(cfg *config.Config, opts Options) (*agentRegistry, error) 
 			registry.Close()
 			return nil, err
 		}
-		if err := registry.add(endpoint.ID, client); err != nil {
+		if err := registry.add(endpoint.ID, endpoint.Profile, client); err != nil {
 			client.Close()
 			registry.Close()
 			return nil, err
@@ -54,7 +55,7 @@ func newAgentRegistry(cfg *config.Config, opts Options) (*agentRegistry, error) 
 	return registry, nil
 }
 
-func (r *agentRegistry) add(id string, client *acp.Client) error {
+func (r *agentRegistry) add(id, profile string, client *acp.Client) error {
 	if _, exists := r.agents[id]; exists {
 		return fmt.Errorf("duplicate ACP agent id %q", id)
 	}
@@ -69,7 +70,7 @@ func (r *agentRegistry) add(id string, client *acp.Client) error {
 	if err := client.SendNotification("notifications/initialized", struct{}{}); err != nil {
 		return fmt.Errorf("notify ACP agent %q initialized: %w", id, err)
 	}
-	runtime := &agentRuntime{id: id, client: client, loadSession: initResp.AgentCapabilities.LoadSession}
+	runtime := &agentRuntime{id: id, profile: profile, client: client, loadSession: initResp.AgentCapabilities.LoadSession}
 	r.agents[id] = runtime
 	r.order = append(r.order, id)
 	client.OnNotification(acp.NewNotificationHandler(&agentNotificationReceiver{agentID: id, registry: r}))
