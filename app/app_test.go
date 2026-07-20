@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -193,14 +194,32 @@ func TestRenderAgentEventHidesThoughtExceptDebug(t *testing.T) {
 func TestRenderAgentEventFormatsToolCallsAsCodeBlocks(t *testing.T) {
 	event := AgentEvent{
 		Type: AgentEventToolStart,
-		Tool: &acp.ToolCall{Title: "exec"},
+		Tool: &acp.ToolCall{Title: "exec", RawInput: json.RawMessage(`{"command":"git status --short"}`)},
 	}
 	items := renderAgentEvent(event, config.VisibilityNormal)
 	if len(items) != 1 {
 		t.Fatalf("items = %#v", items)
 	}
-	if want := "\n```text\nUsing tool: exec\n```\n\n"; items[0].Text != want {
+	if want := "\n```text\nUsing tool: exec\ngit status --short\n```\n\n"; items[0].Text != want {
 		t.Fatalf("tool text = %q, want %q", items[0].Text, want)
+	}
+}
+
+func TestToolCommandSupportsExecuteKindAndCmdField(t *testing.T) {
+	tool := &acp.ToolCall{
+		Title:    "Run command",
+		Kind:     acp.ToolKindExecute,
+		RawInput: json.RawMessage(`{"cmd":"npm test"}`),
+	}
+	if got := toolCommand(tool); got != "npm test" {
+		t.Fatalf("toolCommand() = %q", got)
+	}
+}
+
+func TestToolCommandIgnoresNonExecInput(t *testing.T) {
+	tool := &acp.ToolCall{Title: "attach_file", RawInput: json.RawMessage(`{"command":"secret"}`)}
+	if got := toolCommand(tool); got != "" {
+		t.Fatalf("toolCommand() = %q", got)
 	}
 }
 

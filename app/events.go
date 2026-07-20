@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -86,6 +87,9 @@ func renderAgentEvent(event AgentEvent, visibility config.Visibility) []channels
 			if event.Tool.Title != "" {
 				text += ": " + event.Tool.Title
 			}
+			if command := toolCommand(event.Tool); command != "" {
+				text += "\n" + command
+			}
 			if visibility == config.VisibilityDebug && len(event.Tool.RawInput) > 0 {
 				text += "\n" + string(event.Tool.RawInput)
 			}
@@ -120,6 +124,27 @@ func renderAgentEvent(event AgentEvent, visibility config.Visibility) []channels
 		}
 	}
 	return nil
+}
+
+func toolCommand(tool *acp.ToolCall) string {
+	if tool == nil {
+		return ""
+	}
+	title := strings.ToLower(strings.TrimSpace(tool.Title))
+	if title != "exec" && tool.Kind != acp.ToolKindExecute {
+		return ""
+	}
+	var input struct {
+		Command string `json:"command"`
+		Cmd     string `json:"cmd"`
+	}
+	if err := json.Unmarshal(tool.RawInput, &input); err != nil {
+		return ""
+	}
+	if command := strings.TrimSpace(input.Command); command != "" {
+		return command
+	}
+	return strings.TrimSpace(input.Cmd)
 }
 
 func statusCodeBlock(text string) string {
