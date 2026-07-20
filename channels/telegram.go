@@ -7,6 +7,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -16,6 +17,7 @@ import (
 
 const telegramTextLimit = 3900
 const telegramStartupAttempts = 3
+const telegramStreamUpdateInterval = time.Second
 
 type telegramConfig struct {
 	telegram.Config
@@ -107,10 +109,19 @@ func (t *TelegramChannel) CreateReplyWriter(target string) Writer {
 }
 
 type TelegramWriter struct {
-	bot       *telegram.TelegramBot
-	chatID    string
-	messageID int64
-	buffer    string
+	bot            *telegram.TelegramBot
+	chatID         string
+	messageID      int64
+	buffer         string
+	published      string
+	publishedHTML  bool
+	lastUpdate     time.Time
+	updateTimer    *time.Timer
+	updateInterval time.Duration
+	generation     uint64
+	mu             sync.Mutex
+
+	editTextOverride func(text, fallbackText string) (bool, error)
 }
 
 func (w *TelegramWriter) sendText(text string, parseMode string) (int64, error) {
@@ -126,7 +137,10 @@ func (w *TelegramWriter) sendText(text string, parseMode string) (int64, error) 
 	return msg.MessageID, nil
 }
 
-func (w *TelegramWriter) editText(text, fallbackText string) error {
+func (w *TelegramWriter) editText(text, fallbackText string) (bool, error) {
+	if w.editTextOverride != nil {
+		return w.editTextOverride(text, fallbackText)
+	}
 	_, err := w.bot.EditMessageText(&telegram.EditMessageTextRequest{
 		ChatID:    w.chatID,
 		MessageID: w.messageID,
@@ -138,14 +152,18 @@ func (w *TelegramWriter) editText(text, fallbackText string) error {
 		msgID, err2 := w.sendText(fallbackText, "")
 		if err2 != nil {
 			log.Printf("[ERROR] SendMessage (fallback): %v", err2)
-			return err2
+			return false, err2
 		}
 		w.messageID = msgID
+		return false, nil
 	}
-	return nil
+	return true, nil
 }
 
 func (w *TelegramWriter) Write(s string, done bool) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	if done && s == "" && w.messageID == 0 {
 		return nil
 	}
@@ -164,39 +182,86 @@ func (w *TelegramWriter) Write(s string, done bool) error {
 			return err
 		}
 		w.messageID = msgID
+		w.published = preview
+		w.publishedHTML = false
+		w.lastUpdate = time.Now()
 		if done {
-			return w.flush()
+			return w.flushLocked()
 		}
 		return nil
 	}
 
-	html := tgmd.Convert(telegramPreview(w.buffer))
-
-	if !done && len(w.buffer)%20 == 0 {
-		if err := w.editText(html, w.buffer); err != nil {
-			return err
-		}
-	}
-
 	if done {
-		return w.flush()
+		return w.flushLocked()
 	}
 
+	return w.scheduleUpdateLocked()
+}
+
+func (w *TelegramWriter) scheduleUpdateLocked() error {
+	if w.updateTimer != nil {
+		return nil
+	}
+	interval := w.updateInterval
+	if interval <= 0 {
+		interval = telegramStreamUpdateInterval
+	}
+	delay := time.Until(w.lastUpdate.Add(interval))
+	if delay <= 0 {
+		return w.publishPreviewLocked()
+	}
+	generation := w.generation
+	w.updateTimer = time.AfterFunc(delay, func() {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		w.updateTimer = nil
+		if generation != w.generation || w.messageID == 0 {
+			return
+		}
+		if err := w.publishPreviewLocked(); err != nil {
+			log.Printf("[ERROR] Telegram stream update: %v", err)
+		}
+	})
 	return nil
 }
 
-func (w *TelegramWriter) flush() error {
+func (w *TelegramWriter) publishPreviewLocked() error {
+	preview := telegramPreview(w.buffer)
+	if preview == w.published {
+		return nil
+	}
+	publishedHTML, err := w.editText(tgmd.Convert(preview), preview)
+	if err != nil {
+		return err
+	}
+	w.published = preview
+	w.publishedHTML = publishedHTML
+	w.lastUpdate = time.Now()
+	return nil
+}
+
+func (w *TelegramWriter) flushLocked() error {
+	if w.updateTimer != nil {
+		w.updateTimer.Stop()
+		w.updateTimer = nil
+	}
+	w.generation++
+
 	parts := splitTelegramMarkdown(w.buffer, telegramTextLimit)
 	if len(parts) == 0 {
-		w.buffer = ""
-		w.messageID = 0
+		w.resetLocked()
 		return nil
 	}
 
 	first := tgmd.Convert(parts[0])
 	if w.messageID != 0 {
-		if err := w.editText(first, parts[0]); err != nil {
-			return err
+		if w.published != parts[0] || !w.publishedHTML {
+			publishedHTML, err := w.editText(first, parts[0])
+			if err != nil {
+				return err
+			}
+			w.published = parts[0]
+			w.publishedHTML = publishedHTML
 		}
 	} else {
 		msgID, err := w.sendText(first, "HTML")
@@ -204,6 +269,8 @@ func (w *TelegramWriter) flush() error {
 			return err
 		}
 		w.messageID = msgID
+		w.published = parts[0]
+		w.publishedHTML = true
 	}
 
 	for _, part := range parts[1:] {
@@ -213,9 +280,16 @@ func (w *TelegramWriter) flush() error {
 		}
 	}
 
-	w.buffer = ""
-	w.messageID = 0
+	w.resetLocked()
 	return nil
+}
+
+func (w *TelegramWriter) resetLocked() {
+	w.buffer = ""
+	w.published = ""
+	w.publishedHTML = false
+	w.messageID = 0
+	w.lastUpdate = time.Time{}
 }
 
 func telegramPreview(s string) string {
@@ -340,10 +414,19 @@ func updateFenceState(openFence, text string) string {
 }
 
 func fenceMarker(openFence string) string {
-	if strings.HasPrefix(openFence, "~~~") {
-		return "~~~"
+	trimmed := strings.TrimSpace(openFence)
+	if trimmed == "" {
+		return ""
 	}
-	return "```"
+	marker := trimmed[0]
+	length := 0
+	for length < len(trimmed) && trimmed[length] == marker {
+		length++
+	}
+	if length < 3 || (marker != '`' && marker != '~') {
+		return "```"
+	}
+	return trimmed[:length]
 }
 
 func splitLinesAfter(s string) []string {

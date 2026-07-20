@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lsongdev/miya-agents/acp"
 	"github.com/lsongdev/miya-channels/channels"
@@ -189,6 +190,27 @@ func TestRenderAgentEventHidesThoughtExceptDebug(t *testing.T) {
 	}
 }
 
+func TestRenderAgentEventFormatsToolCallsAsCodeBlocks(t *testing.T) {
+	event := AgentEvent{
+		Type: AgentEventToolStart,
+		Tool: &acp.ToolCall{Title: "exec"},
+	}
+	items := renderAgentEvent(event, config.VisibilityNormal)
+	if len(items) != 1 {
+		t.Fatalf("items = %#v", items)
+	}
+	if want := "\n```text\nUsing tool: exec\n```\n\n"; items[0].Text != want {
+		t.Fatalf("tool text = %q, want %q", items[0].Text, want)
+	}
+}
+
+func TestStatusCodeBlockHandlesEmbeddedFence(t *testing.T) {
+	block := statusCodeBlock("Using tool: exec\n```json\n{}\n```")
+	if !strings.HasPrefix(block, "\n````text\n") || !strings.HasSuffix(block, "\n````\n\n") {
+		t.Fatalf("block = %q", block)
+	}
+}
+
 func TestEventContentBlocksIncludesAttachments(t *testing.T) {
 	event := channels.IncomingEvent{
 		Text: "inspect",
@@ -226,6 +248,15 @@ type recordingWriter struct {
 	done   []bool
 }
 
+type notifyingWriter struct {
+	writes chan string
+}
+
+func (w *notifyingWriter) Write(text string, _ bool) error {
+	w.writes <- text
+	return nil
+}
+
 func (w *recordingWriter) Write(text string, done bool) error {
 	w.writes = append(w.writes, text)
 	w.done = append(w.done, done)
@@ -240,5 +271,27 @@ func TestPolicyWriterFinalOnlyCoalescesChunks(t *testing.T) {
 	_ = writer.Write("", true)
 	if len(inner.writes) != 1 || inner.writes[0] != "hello world" || !inner.done[0] {
 		t.Fatalf("writes = %#v done = %#v", inner.writes, inner.done)
+	}
+}
+
+func TestPolicyWriterPublishesTrailingChunkAfterInterval(t *testing.T) {
+	inner := &notifyingWriter{writes: make(chan string, 2)}
+	writer := newPolicyWriter(inner, config.DeliveryConfig{EditIntervalMS: 20})
+	if err := writer.Write("hello", false); err != nil {
+		t.Fatalf("first Write() error = %v", err)
+	}
+	if got := <-inner.writes; got != "hello" {
+		t.Fatalf("first write = %q", got)
+	}
+	if err := writer.Write(" world", false); err != nil {
+		t.Fatalf("second Write() error = %v", err)
+	}
+	select {
+	case got := <-inner.writes:
+		if got != " world" {
+			t.Fatalf("trailing write = %q", got)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("trailing policy update was not published")
 	}
 }

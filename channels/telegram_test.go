@@ -3,8 +3,93 @@ package channels
 import (
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
+
+func TestTelegramWriterPublishesBufferedTextAfterInterval(t *testing.T) {
+	updates := make(chan string, 1)
+	w := &TelegramWriter{
+		messageID:      1,
+		buffer:         "hello",
+		published:      "hello",
+		lastUpdate:     time.Now(),
+		updateInterval: 20 * time.Millisecond,
+		editTextOverride: func(_, fallbackText string) (bool, error) {
+			updates <- fallbackText
+			return true, nil
+		},
+	}
+
+	if err := w.Write(" world", false); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	select {
+	case got := <-updates:
+		if got != "hello world" {
+			t.Fatalf("published text = %q", got)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("buffered update was not published")
+	}
+
+	if err := w.Write("", true); err != nil {
+		t.Fatalf("final Write() error = %v", err)
+	}
+	select {
+	case got := <-updates:
+		t.Fatalf("final flush repeated unchanged edit: %q", got)
+	default:
+	}
+}
+
+func TestTelegramWriterFinalWriteCancelsPendingUpdate(t *testing.T) {
+	var updates []string
+	w := &TelegramWriter{
+		messageID:      1,
+		buffer:         "hello",
+		published:      "hello",
+		lastUpdate:     time.Now(),
+		updateInterval: time.Hour,
+		editTextOverride: func(_, fallbackText string) (bool, error) {
+			updates = append(updates, fallbackText)
+			return true, nil
+		},
+	}
+
+	if err := w.Write(" world", false); err != nil {
+		t.Fatalf("stream Write() error = %v", err)
+	}
+	if err := w.Write("!", true); err != nil {
+		t.Fatalf("final Write() error = %v", err)
+	}
+	if len(updates) != 1 || updates[0] != "hello world!" {
+		t.Fatalf("updates = %#v", updates)
+	}
+	if w.updateTimer != nil {
+		t.Fatal("pending update timer was not cleared")
+	}
+}
+
+func TestTelegramWriterFinalizesInitialPlainTextAsHTML(t *testing.T) {
+	var edits int
+	w := &TelegramWriter{
+		messageID: 1,
+		buffer:    "**hello**",
+		published: "**hello**",
+		editTextOverride: func(_, _ string) (bool, error) {
+			edits++
+			return true, nil
+		},
+	}
+
+	if err := w.Write("", true); err != nil {
+		t.Fatalf("final Write() error = %v", err)
+	}
+	if edits != 1 {
+		t.Fatalf("HTML finalization edits = %d", edits)
+	}
+}
 
 func TestSplitTelegramMarkdownLimitsRenderedHTMLByRunes(t *testing.T) {
 	input := strings.Repeat("你", telegramTextLimit+10)
@@ -61,5 +146,11 @@ func TestTelegramPreviewAddsEllipsisForLongText(t *testing.T) {
 	}
 	if !strings.Contains(preview, "…") {
 		t.Fatalf("preview missing ellipsis")
+	}
+}
+
+func TestFenceMarkerPreservesLongFence(t *testing.T) {
+	if got := fenceMarker("````text"); got != "````" {
+		t.Fatalf("fenceMarker() = %q", got)
 	}
 }

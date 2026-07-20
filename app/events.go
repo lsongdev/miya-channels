@@ -89,7 +89,7 @@ func renderAgentEvent(event AgentEvent, visibility config.Visibility) []channels
 			if visibility == config.VisibilityDebug && len(event.Tool.RawInput) > 0 {
 				text += "\n" + string(event.Tool.RawInput)
 			}
-			return []channels.DeliveryItem{{Kind: "status", Text: text + "\n", Sensitive: visibility == config.VisibilityDebug}}
+			return []channels.DeliveryItem{{Kind: "status", Text: statusCodeBlock(text), Sensitive: visibility == config.VisibilityDebug}}
 		}
 	case AgentEventToolUpdate:
 		if visibilityRank(visibility) >= visibilityRank(config.VisibilityVerbose) && event.ToolUpdate != nil {
@@ -103,7 +103,7 @@ func renderAgentEvent(event AgentEvent, visibility config.Visibility) []channels
 			if visibility == config.VisibilityDebug && len(event.ToolUpdate.RawOutput) > 0 {
 				parts = append(parts, string(event.ToolUpdate.RawOutput))
 			}
-			return []channels.DeliveryItem{{Kind: "status", Text: strings.Join(parts, " - ") + "\n", Sensitive: visibility == config.VisibilityDebug}}
+			return []channels.DeliveryItem{{Kind: "status", Text: statusCodeBlock(strings.Join(parts, " - ")), Sensitive: visibility == config.VisibilityDebug}}
 		}
 	case AgentEventPlan:
 		if visibilityRank(visibility) >= visibilityRank(config.VisibilityVerbose) && event.Plan != nil {
@@ -120,6 +120,15 @@ func renderAgentEvent(event AgentEvent, visibility config.Visibility) []channels
 		}
 	}
 	return nil
+}
+
+func statusCodeBlock(text string) string {
+	text = strings.TrimSpace(text)
+	fence := "```"
+	for strings.Contains(text, fence) {
+		fence += "`"
+	}
+	return "\n" + fence + "text\n" + text + "\n" + fence + "\n\n"
 }
 
 func visibilityRank(visibility config.Visibility) int {
