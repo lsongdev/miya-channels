@@ -73,6 +73,10 @@ func LoadGatewayConfig() (*Config, []ChannelInstance, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	data, err = resolveCredentialReferences(data)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve config credentials: %w", err)
+	}
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(data, &root); err != nil {
 		return nil, nil, err
